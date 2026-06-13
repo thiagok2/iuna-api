@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # 1. Serviço da IUNA API (FastAPI)
+  web:
+    build: .
+    container_name: iuna_api_web
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - rasa
+      # - elasticsearch # Descomente se for usar o Elasticsearch local do docker-compose
+    networks:
+      - iuna-network
+
+  # 2. Serviço do Rasa Open Source
+  rasa:
+    image: rasa/rasa:3.6.15-full
+    container_name: iuna_rasa_service
+    ports:
+      - "5005:5005"
+    volumes:
+      - ./rasa:/app
+    command: run --enable-api --cors "*"
+    networks:
+      - iuna-network
+
+  # 3. Serviço do Elasticsearch (Opcional - caso queira rodar localmente)
+  # Descomente todo o bloco abaixo se desejar usar o Elasticsearch em container
+  # elasticsearch:
+  #   image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
+  #   container_name: iuna_elasticsearch
+  #   environment:
+  #     - discovery.type=single-node
+  #     - xpack.security.enabled=false
+  #     - ES_JAVA_OPTS=-Xms512m -Xmx512m
+  #   ports:
+  #     - "9200:9200"
+  #   volumes:
+  #     - es_data:/usr/share/elasticsearch/data
+  #   networks:
+  #     - iuna-network
+
+networks:
+  iuna-network:
+    driver: bridge
+
+# volumes:
+#   es_data:
+#     driver: local

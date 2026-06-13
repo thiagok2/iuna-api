@@ -1,0 +1,7 @@
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_spec.py"]
+python_classes = ["Test*", "*Spec"]
+python_functions = ["test_*", "spec_*"]
+addopts = "-v --tb=short"
