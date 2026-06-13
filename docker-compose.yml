@@ -11,16 +11,18 @@ services:
       - .:/app
     env_file:
       - .env
-    depends_on:
-      - rasa
-      # - elasticsearch # Descomente se for usar o Elasticsearch local do docker-compose
+    # depends_on removido — Rasa e Elasticsearch são opcionais (ver perfis abaixo)
     networks:
       - iuna-network
 
-  # 2. Serviço do Rasa Open Source
+  # 2. Serviço do Rasa Open Source (opcional)
+  # Iniciar com: docker-compose --profile rasa up
+  # Treinar modelo: docker-compose --profile rasa run --rm rasa rasa train
   rasa:
     image: rasa/rasa:3.6.15-full
     container_name: iuna_rasa_service
+    profiles:
+      - rasa
     ports:
       - "5005:5005"
     volumes:
