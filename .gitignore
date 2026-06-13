@@ -119,3 +119,8 @@ active/
 # OS metadata
 .DS_Store
 Thumbs.db
+
+# Environment variables — nunca versionar
+.env
+.env.local
+.env.*.local
