@@ -31,26 +31,6 @@ services:
     networks:
       - iuna-network
 
-  # 3. Serviço do Elasticsearch (Opcional - caso queira rodar localmente)
-  # Descomente todo o bloco abaixo se desejar usar o Elasticsearch em container
-  # elasticsearch:
-  #   image: docker.elastic.co/elasticsearch/elasticsearch:8.12.2
-  #   container_name: iuna_elasticsearch
-  #   environment:
-  #     - discovery.type=single-node
-  #     - xpack.security.enabled=false
-  #     - ES_JAVA_OPTS=-Xms512m -Xmx512m
-  #   ports:
-  #     - "9200:9200"
-  #   volumes:
-  #     - es_data:/usr/share/elasticsearch/data
-  #   networks:
-  #     - iuna-network
-
 networks:
   iuna-network:
     driver: bridge
-
-# volumes:
-#   es_data:
-#     driver: local
