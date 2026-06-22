@@ -23,7 +23,11 @@ dev = [
     "httpx>=0.27.0",
 ]
 
-[tool.pytest.ini_options]
+[project.scripts]
+iuna = "app.cli.main:app"
+
+[tool.scripts]
+start = "uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
 pythonpath = ["."]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_spec.py"]
