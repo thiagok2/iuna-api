@@ -30,13 +30,17 @@
 - [x] Dependency `verify_token` (compara Bearer com API_SECRET_TOKEN)
 - [x] Middleware `RequestIdMiddleware`
 - [x] Exception handlers globais (NotFound, Conflict, Unauthorized, ServiceUnavailable)
-- [x] **Validar**: curl sem token → 401. Com token → passa. Response tem X-Request-Id.
+- [x] **Validar**:
+  - `curl localhost:8000/api/v1/health-check` → 200 (sem auth)
+  - `curl localhost:8000/api/v1/health` → 401 (sem token)
+  - `curl -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" localhost:8000/api/v1/health` → 200
+  - Response tem header X-Request-Id
 
 ### T-04: CLI setup-indices
-- [ ] Criar `app/cli/main.py` (Typer)
-- [ ] Comando `iuna setup-indices [--suffix _test] [--recreate]`
-- [ ] Lê `elastic/*.json`, cria cada índice **apenas se não existir** (verifica antes). Com `--recreate` deleta e recria.
-- [ ] **Validar**: `python -m app.cli.main setup-indices` → índices criados no ES (verificar via Kibana/curl)
+- [x] Criar `app/cli/main.py` (Typer)
+- [x] Comando `iuna setup-indices [--suffix _test] [--recreate]`
+- [x] Lê `elastic/*.json`, cria cada índice **apenas se não existir** (verifica antes). Com `--recreate` deleta e recria.
+- [x] **Validar**: `python -m app.cli.main setup-indices` → índices criados no ES (verificar via Kibana/curl)
 
 ### T-05: PDF Extractor + samples/
 - [ ] Criar `app/core/pdf_extractor.py` (pdfplumber + fallback PyPDF2)

@@ -1,5 +1,11 @@
 # 🤖 IUNA API
 
+
+make start     # inicia a API (com hot-reload)
+make test      # roda testes
+make install   # instala deps
+
+
 > **API do projeto IUNA - IFAL.**  
 > Uma solução moderna de backend desenvolvida com **FastAPI** para gerenciar a vetorização, resumo, extração de entidades, divisão de textos (chunks) e conversação inteligente (RAG) integrada com **Elasticsearch**, **Rasa** e **LLMs** (Gemini).
 
