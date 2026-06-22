@@ -4,7 +4,7 @@
 **Versão**: 2.0.0  
 **Princípio-Chave**: SIMPLICIDADE > GENERALIDADE
 
-> **Existem apenas 2 tipos de objetos: `documentos_ifal` e `artefatos`.**  
+> **Existem apenas 2 tipos de objetos: `documentos_ifal_v2` e `artefatos`.**  
 > Sem framework genérico. Sem DocumentAdapter. Sem SEARCH_CONFIG. Cada tipo tem seu serviço concreto.
 
 ---
@@ -15,8 +15,10 @@
 
 - ES roda fora do docker-compose (cloud ou instância dedicada).
 - Credenciais via `.env`: `ELASTICSEARCH_HOSTS`, `ELASTICSEARCH_USER`, `ELASTICSEARCH_PASSWORD`.
+- **Conexão via HTTPS** (URL com `https://`). Em dev com certificado auto-assinado, usar `verify_certs=False`.
 - **Sufixo de índice**: variável `ES_INDEX_SUFFIX` (default `""`, valor `_test` para testes).
-  - Exemplo: `documentos_ifal_test`, `artefatos_chunks_test`.
+  - Exemplo: `documentos_ifal_v2_test`, `artefatos_chunks_test`.
+- **Ingest Attachment Pipeline** é pré-requisito para extração de texto de PDFs via ES. Deve ser criado antes de indexar documentos. Ver `elastic/setup/20260622_ingest_pipeline.md`.
 - **Criação de índices** via CLI:
 
 ```bash
@@ -108,11 +110,11 @@ BATCH_DEFAULT_CONCURRENCY=3
 
 | Service | Tipo | Responsabilidade |
 |---------|------|-----------------|
-| `DocumentosSearchService` | Específico | Busca full-text, filtros, facetas para `documentos_ifal` |
+| `DocumentosSearchService` | Específico | Busca full-text, filtros, facetas para `documentos_ifal_v2` |
 | `ArtefatosSearchService` | Específico | Busca full-text, filtros simples para `artefatos` |
 | `DocumentosCrudService` | Específico | CRUD de documentos (indexação, consulta, deleção) |
 | `ArtefatosCrudService` | Específico | CRUD de artefatos (upload PDF, consulta, deleção) |
-| `EnrichmentService` | Compartilhado | Resumo, vetorização, entidades, chunking — recebe `(index, doc_id, root)` |
+| `EnrichmentService` | Compartilhado | Resumo, vetorização, entidades, keywords, chunking — recebe `(index, doc_id, root)` |
 | `ChunksSearchService` | Compartilhado | Busca em chunks de ambos os tipos |
 | `ChatService` | Compartilhado | RAG com Rasa + LLM + histórico |
 | `StatsService` | Compartilhado | Estatísticas agregadas |
@@ -121,7 +123,7 @@ BATCH_DEFAULT_CONCURRENCY=3
 
 > **Existem apenas 2 tipos fixos. Não existe extensibilidade para N tipos.**
 
-- `documentos_ifal` é o mais específico (metadados ricos sob `ato.*`).
+- `documentos_ifal_v2` é o mais específico (metadados ricos sob `ato.*`).
 - `artefatos` é genérico (metadados mínimos sob `artefato.*`).
 
 **O que é COMPARTILHADO** — services que recebem `index_name` + `root_prefix` + `doc_id`:
@@ -173,13 +175,15 @@ app/
 │   └── factory.py                  # get_llm_provider()
 ├── core/
 │   ├── exceptions.py               # Exceções customizadas
-│   ├── pdf_extractor.py            # Extração de texto de PDF
+│   ├── pdf_extractor_local.py       # Extração local de texto de PDF (fallback offline/testes)
 │   └── query_helpers.py            # Funções utilitárias de query ES
 ├── cli/
 │   └── main.py                     # Comandos: setup-indices, enrich, index, delete
 ├── config.py                       # Settings (pydantic-settings)
 └── main.py                         # FastAPI app + startup/shutdown
 ```
+
+> **Nota**: A extração primária de texto de PDFs é feita via ES Ingest Attachment Pipeline (Apache Tika). O arquivo `pdf_extractor_local.py` é apenas o fallback local para cenários offline/testes.
 
 ---
 
@@ -198,7 +202,7 @@ class Settings(BaseSettings):
     API_SECRET_TOKEN: str = ""
 
     # Elasticsearch
-    ELASTICSEARCH_HOSTS: str = "http://localhost:9200"
+    ELASTICSEARCH_HOSTS: str = "https://localhost:9200"
     ELASTICSEARCH_USER: str = "elastic"
     ELASTICSEARCH_PASSWORD: str = ""
     ES_INDEX_SUFFIX: str = ""  # "_test" para testes
@@ -225,11 +229,11 @@ class Settings(BaseSettings):
     # Helpers para nomes de índice
     @property
     def index_documentos(self) -> str:
-        return f"documentos_ifal{self.ES_INDEX_SUFFIX}"
+        return f"documentos_ifal_v2{self.ES_INDEX_SUFFIX}"
 
     @property
     def index_documentos_chunks(self) -> str:
-        return f"documentos_ifal_chunks{self.ES_INDEX_SUFFIX}"
+        return f"documentos_ifal_v2_chunks{self.ES_INDEX_SUFFIX}"
 
     @property
     def index_artefatos(self) -> str:
@@ -882,9 +886,9 @@ Response 200:
 {
   "success": true,
   "data": {
-    "documentos_ifal": { "total": 500, "sem_resumo": 120, "sem_entidades": 200, "sem_embedding": 150, "sem_chunking": 300 },
+    "documentos_ifal_v2": { "total": 500, "sem_resumo": 120, "sem_entidades": 200, "sem_embedding": 150, "sem_chunking": 300 },
     "artefatos": { "total": 80, "sem_resumo": 60, "sem_entidades": 70, "sem_embedding": 65, "sem_chunking": 40 },
-    "chunks": { "documentos_ifal_chunks": 1200, "artefatos_chunks": 450 }
+    "chunks": { "documentos_ifal_v2_chunks": 1200, "artefatos_chunks": 450 }
   },
   "meta": { "took_ms": 25 }
 }
@@ -918,7 +922,7 @@ Response 503 (dependência falha):
 
 ## 4. Modelagem de Dados
 
-### 4.1 `documentos_ifal` — Documentos com metadados ricos
+### 4.1 `documentos_ifal_v2` — Documentos com metadados ricos
 
 Mapping existente + campos de enriquecimento sob `ato.*`:
 
@@ -1107,7 +1111,7 @@ Os search services chamam essas funções diretamente. Simples. Sem mágica.
 
 ## 6. DocumentosSearchService
 
-Classe concreta que conhece TODOS os campos de `documentos_ifal`. Sem abstração, sem config.
+Classe concreta que conhece TODOS os campos de `documentos_ifal_v2`. Sem abstração, sem config.
 
 ```python
 # app/services/documentos_search.py
@@ -1119,7 +1123,7 @@ class DocumentosSearchService:
 
     async def search_fulltext(self, q: str, filters: dict = None,
                               page: int = 1, page_size: int = 20) -> dict:
-        """Busca full-text com relevância em documentos_ifal."""
+        """Busca full-text com relevância em documentos_ifal_v2."""
         should = []
 
         # match_phrase (alta relevância)
@@ -1388,7 +1392,7 @@ class ChunksSearchService:
                             page_size: int = 20) -> dict:
         """
         Busca em chunks.
-        - source_type: "documentos_ifal" | "artefatos" | None (ambos)
+        - source_type: "documentos_ifal_v2" | "artefatos" | None (ambos)
         - document_id: restringe a um documento pai
         """
         indices = self._resolve_indices(source_type)
@@ -1410,7 +1414,7 @@ class ChunksSearchService:
         return await self.es.search(index=",".join(indices), body=body)
 
     def _resolve_indices(self, source_type: str = None) -> list[str]:
-        if source_type == "documentos_ifal":
+        if source_type == "documentos_ifal_v2":
             return [settings.index_documentos_chunks]
         elif source_type == "artefatos":
             return [settings.index_artefatos_chunks]
@@ -1423,7 +1427,7 @@ class ChunksSearchService:
 ## 9. EnrichmentService (compartilhado)
 
 O **único** service compartilhado entre os dois tipos. Recebe 3 parâmetros que dizem tudo:
-- `index_name` — qual índice (ex: `documentos_ifal` ou `artefatos`)
+- `index_name` — qual índice (ex: `documentos_ifal_v2` ou `artefatos`)
 - `doc_id` — ID do documento
 - `root_prefix` — prefixo dos campos (ex: `"ato"` ou `"artefato"`)
 
@@ -1473,6 +1477,18 @@ class EnrichmentService:
             root: {"entidades": entities, "entidades_at": "now"}
         }})
         return entities
+
+    async def enrich_keywords(self, index: str, doc_id: str, root: str) -> list[str]:
+        """Extrai keywords/termos-chave do conteúdo e grava em {root}.keywords."""
+        doc = await self.es.get(index=index, id=doc_id)
+        content = doc["_source"]["attachment"]["content"]
+
+        keywords = await self.llm.extract_keywords(content)
+
+        await self.es.update(index=index, id=doc_id, body={"doc": {
+            root: {"keywords": keywords, "keywords_at": "now"}
+        }})
+        return keywords
 
     async def enrich_chunks(self, index: str, chunks_index: str,
                             doc_id: str, root: str,
@@ -1525,12 +1541,14 @@ class EnrichmentService:
                          doc_id: str, root: str) -> dict:
         """Executa todo o enriquecimento na ordem correta."""
         entities = await self.enrich_entities(index, doc_id, root)
+        keywords = await self.enrich_keywords(index, doc_id, root)
         summary = await self.enrich_summary(index, doc_id, root)
         vector = await self.enrich_vector(index, doc_id, root)
         total_chunks = await self.enrich_chunks(index, chunks_index, doc_id, root)
 
         return {
             "entities_count": len(entities),
+            "keywords_count": len(keywords),
             "summary_length": len(summary),
             "vector_dims": len(vector),
             "total_chunks": total_chunks
@@ -1568,7 +1586,7 @@ class ESClient:
         self._client = AsyncElasticsearch(
             hosts=settings.ELASTICSEARCH_HOSTS.split(","),
             basic_auth=(settings.ELASTICSEARCH_USER, settings.ELASTICSEARCH_PASSWORD),
-            verify_certs=True
+            verify_certs=False  # self-signed cert em dev
         )
 
     async def close(self):
@@ -1619,6 +1637,13 @@ es_client = ESClient()
 
 ## 11. LLM Providers
 
+### 11.1 Gemini (default)
+
+- **SDK**: `google-genai` (pacote moderno; NÃO usar `google-generativeai` que está deprecated)
+- **Modelo de geração de texto**: `gemini-flash-latest` (resolve atualmente para gemini-3.5-flash)
+- **Modelo de embedding**: `gemini-embedding-001` (768 dimensões)
+- **Rate limits**: free tier tem limites estritos. O código deve implementar exponential backoff com retry.
+
 ```python
 # app/providers/base.py
 from abc import ABC, abstractmethod
@@ -1632,6 +1657,9 @@ class BaseLLMProvider(ABC):
 
     @abstractmethod
     async def extract_entities(self, text: str) -> list[dict]: ...
+
+    @abstractmethod
+    async def extract_keywords(self, text: str) -> list[str]: ...
 
     @abstractmethod
     async def generate_response(self, context: str, question: str,
@@ -1736,7 +1764,15 @@ class ArtefatosCrudService:
                      tipo: str = None, tags: list[str] = None,
                      force: bool = False) -> dict:
         """
-        Upload de PDF: extrai texto, indexa artefato.
+        Upload de PDF: indexa artefato com extração de texto.
+
+        Estratégia de extração:
+        - Primária: Envia PDF como base64 no campo `data` com
+          `?pipeline=attachment_pipeline`. ES/Tika extrai texto para
+          `attachment.content`. O campo `data` é removido pela pipeline após extração.
+        - Fallback local: `pdf_extractor_local.py` (pdfplumber/PyPDF2) para
+          offline/testes quando ES Ingest Pipeline não está disponível.
+
         Se re-upload (mesmo filename) → deleta chunks antigos e reindexa.
         """
         # Verificar existência
@@ -1753,8 +1789,10 @@ class ArtefatosCrudService:
             )
             await self.es.delete(index=self.index, id=old_id)
 
-        # Extrair texto do PDF
-        text_content = extract_pdf_text(file_content)
+        # Extração de texto via ES Ingest Pipeline (primário)
+        # Envia PDF como base64 → pipeline extrai texto → campo `data` removido
+        import base64
+        data_b64 = base64.b64encode(file_content).decode("utf-8")
         artefato_id = str(uuid4())
         now = datetime.utcnow().isoformat()
 
@@ -1768,15 +1806,15 @@ class ArtefatosCrudService:
                 "created_at": now,
                 "updated_at": now,
             },
-            "attachment": {
-                "content": text_content,
-                "title": titulo,
-                "content_length": len(text_content),
-            },
+            "data": data_b64,  # removido pela pipeline após extração
             "filename": filename,
         }
 
-        result = await self.es.index(index=self.index, id=artefato_id, body=body)
+        # Indexa com pipeline — ES/Tika extrai texto para attachment.content
+        result = await self.es.index(
+            index=self.index, id=artefato_id, body=body,
+            pipeline=settings.ES_INGEST_PIPELINE
+        )
         return result
 
     async def get_by_id(self, artefato_id: str) -> dict:
@@ -1956,7 +1994,7 @@ class ChatService:
         return settings.index_documentos_chunks
 
     def _resolve_chunks_indices(self, source_type: str = None) -> list[str]:
-        if source_type == "documentos_ifal":
+        if source_type == "documentos_ifal_v2":
             return [settings.index_documentos_chunks]
         elif source_type == "artefatos":
             return [settings.index_artefatos_chunks]
@@ -2001,7 +2039,7 @@ def setup_indices(suffix: str = "", recreate: bool = False):
 
 @app.command()
 def enrich(
-    source_type: str = typer.Option(..., help="documentos_ifal | artefatos"),
+    source_type: str = typer.Option(..., help="documentos_ifal_v2 | artefatos"),
     directory: str = typer.Option(None, help="Diretório com arquivos"),
     ids: list[str] = typer.Option(None, help="Lista de IDs"),
     summarize: bool = False,
@@ -2040,7 +2078,7 @@ def delete(
 
 def _resolve_source(source_type: str) -> tuple[str, str, str]:
     """Resolve index_name, chunks_index, root_prefix para o source_type."""
-    if source_type == "documentos_ifal":
+    if source_type == "documentos_ifal_v2":
         return (
             settings.index_documentos,
             settings.index_documentos_chunks,
@@ -2160,13 +2198,15 @@ Header `X-Request-Id` em todas as respostas.
 | 5 | **Sem DocumentAdapter** | Cada CRUD service conhece seu próprio mapping. Sem indireção. |
 | 6 | **Sem SEARCH_CONFIG dict** | Campos hardcoded no service. Fácil de ler, fácil de debugar. |
 | 7 | **ES_INDEX_SUFFIX para testes** | Permite rodar testes contra índices isolados sem afetar produção. |
-| 8 | **PDF extraction no código (pdfplumber)** | Sem dependência de Ingest Pipeline do ES. Controle total do texto extraído. |
+| 8 | **PDF extraction primária via ES Ingest Pipeline (Apache Tika)** | Envia PDF como base64 com `?pipeline=attachment_pipeline`. ES/Tika extrai texto. Fallback local (`pdf_extractor_local.py` com pdfplumber) apenas para offline/testes. |
 | 9 | **Embedding a partir do resumo** | Resumos são mais densos semanticamente que texto bruto. Melhora qualidade do kNN. |
 | 10 | **Chunking só para docs >= 10k chars** | Docs pequenos cabem inteiros no contexto do LLM. Evita overhead desnecessário. |
 | 11 | **RRF para busca híbrida no chat** | Combina precisão do BM25 com semântica do kNN sem tuning manual de pesos. |
 | 12 | **Rasa com fallback** | Se Rasa cair, chat continua funcionando no modo `ask_about_document`. |
 | 13 | **CLI com Typer** | API moderna, tipada, autocompletion. Compartilha services com a API HTTP. |
 | 14 | **Bearer token simples** | Consumidores são apps, não humanos. Token único é suficiente. |
+| 15 | **ES via HTTPS com `verify_certs=False`** | Instância de dev usa certificado auto-assinado. Em produção, habilitar verificação. |
+| 16 | **SDK `google-genai` para Gemini** | Pacote oficial moderno. `google-generativeai` está deprecated. Exponential backoff obrigatório por rate limits do free tier. |
 
 ---
 
@@ -2189,7 +2229,7 @@ sequenceDiagram
     Service->>QH: build_nested_entity_query(...)
     Service->>QH: build_term_filter("ato.tipo_doc.keyword", "portaria")
     Service->>QH: build_highlight([...])
-    Service->>ES: search(index="documentos_ifal", body={...})
+    Service->>ES: search(index="documentos_ifal_v2", body={...})
     ES-->>Service: {hits, total, took}
     Service-->>Router: resultados formatados
     Router-->>Client: {success: true, data: results, meta: {total, page, took_ms}}
@@ -2212,17 +2252,22 @@ sequenceDiagram
     LLM-->>Enrich: [{texto, categoria, confianca}, ...]
     Enrich->>ES: update → artefato.entidades + artefato.entidades_at
 
-    Note over Enrich: 2. Resumo
+    Note over Enrich: 2. Keywords
+    Enrich->>LLM: extract_keywords(content)
+    LLM-->>Enrich: ["licitação", "processo seletivo", ...]
+    Enrich->>ES: update → artefato.keywords + artefato.keywords_at
+
+    Note over Enrich: 3. Resumo
     Enrich->>LLM: generate_summary(content)
     LLM-->>Enrich: "resumo do documento..."
     Enrich->>ES: update → artefato.resumo + artefato.resumo_at
 
-    Note over Enrich: 3. Vetorização (usa resumo)
+    Note over Enrich: 4. Vetorização (usa resumo)
     Enrich->>LLM: generate_embedding(resumo)
     LLM-->>Enrich: [0.12, -0.34, ...]
     Enrich->>ES: update → artefato.embedding_vector + artefato.embedding_vector_at
 
-    Note over Enrich: 4. Chunking (se content >= 10k chars)
+    Note over Enrich: 5. Chunking (se content >= 10k chars)
     Enrich->>Enrich: _split_text(content, 3000, 500)
     loop Para cada chunk
         Enrich->>LLM: generate_embedding(chunk)

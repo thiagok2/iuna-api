@@ -40,10 +40,32 @@
 - [x] Criar `app/cli/main.py` (Typer)
 - [x] Comando `iuna setup-indices [--suffix _test] [--recreate]`
 - [x] Lê `elastic/*.json`, cria cada índice **apenas se não existir** (verifica antes). Com `--recreate` deleta e recria.
-- [x] **Validar**: `python -m app.cli.main setup-indices` → índices criados no ES (verificar via Kibana/curl)
+- [x] **Validar** (ES online):
+  ```
+  source .venv/bin/activate
+  python -m app.cli.main setup-indices
+  ```
+  Saída esperada (se índices já existem):
+  ```
+  🔌 Conectado ao Elasticsearch
+  ⏭  documentos_ifal_v2 — Already exists
+  ⏭  documentos_ifal_v2_chunks — Already exists
+  ⏭  artefatos — Already exists
+  ⏭  artefatos_chunks — Already exists
+  ⏭  chat_sessions — Already exists
+  🏁 setup-indices finalizado.
+  ```
+  Testar criação de índices de teste:
+  ```
+  python -m app.cli.main setup-indices --suffix _test
+  ```
+  Deve criar 5 índices com sufixo `_test`. Verificar:
+  ```
+  curl -H "Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=" "https://elastic.pnld-avaliacao-dev.nees.ufal.br/_cat/indices?v" | grep _test
+  ```
 
 ### T-05: PDF Extractor + samples/
-- [x] Criar `app/core/pdf_extractor.py` (fallback local: pdfplumber + PyPDF2)
+- [x] Criar `app/core/pdf_extractor_local.py` (fallback local: pdfplumber + PyPDF2)
 - [x] Estratégia primária: ES Ingest Attachment Pipeline (Apache Tika)
 - [x] Criar pasta `samples/` com PDFs de exemplo
 - [x] **Validar fallback local**:
@@ -85,7 +107,45 @@
   - `GET /documentos/{id}`, `GET /documentos/by-filename/{filename}`
   - `GET /documentos` (listagem paginada)
   - `PATCH /documentos/{id}`, `DELETE /documentos/{id}`
-- [ ] **Validar**: Upload PDF via Swagger → doc aparece no ES. GET retorna.
+- [ ] **Validar** (ES online):
+  1. Upload via curl:
+  ```
+  curl -X POST -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+    -F "file=@samples/edital_selecao.pdf" \
+    -F "titulo=Edital Seleção 2024" \
+    -F "tipo_doc=edital" \
+    -F "ano=2024" \
+    -F "orgao=IFAL" \
+    http://localhost:8000/api/v1/documentos/upload
+  ```
+  Resposta esperada: `{"success": true, "data": {"_id": "...", "ato_id": "...", "filename": "edital_selecao.pdf"}}`
+
+  2. Verificar que o doc existe no ES:
+  ```
+  curl -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+    http://localhost:8000/api/v1/documentos/by-filename/edital_selecao.pdf
+  ```
+  Deve retornar o doc com `attachment.content` preenchido (texto extraído pelo Tika).
+
+  3. Listar documentos:
+  ```
+  curl -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+    "http://localhost:8000/api/v1/documentos/?page=1&page_size=5"
+  ```
+
+  4. Atualizar metadados:
+  ```
+  curl -X PATCH -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+    -H "Content-Type: application/json" \
+    -d '{"tags": ["educação", "seleção"]}' \
+    http://localhost:8000/api/v1/documentos/<ID_RETORNADO>
+  ```
+
+  5. Deletar:
+  ```
+  curl -X DELETE -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+    http://localhost:8000/api/v1/documentos/<ID_RETORNADO>
+  ```
 
 ### T-08: ArtefatosCrudService + Router
 - [x] Criar `app/services/artefatos_crud.py`:
@@ -93,7 +153,44 @@
   - `get_by_id`, `get_by_filename`, `delete`, `list_all`, `update_metadata`
   - Re-upload: deleta chunks antigos antes de reindexar
 - [x] Substituir stubs em `crud_artefatos.py`
-- [ ] **Validar**: Upload PDF artefato via Swagger → aparece no ES
+- [ ] **Validar** (ES online):
+  1. Upload artefato:
+  ```
+  curl -X POST -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+    -F "file=@samples/plano_ensino_programacao.pdf" \
+    -F "titulo=Plano de Ensino - Programação I" \
+    -F "tipo=plano_ensino" \
+    -F "tags=programação,python" \
+    -F "uploaded_by=admin" \
+    http://localhost:8000/api/v1/artefatos/upload
+  ```
+  Resposta esperada: `{"success": true, "data": {"_id": "...", "artefato_id": "...", "filename": "plano_ensino_programacao.pdf"}}`
+
+  2. Buscar por filename:
+  ```
+  curl -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+    http://localhost:8000/api/v1/artefatos/by-filename/plano_ensino_programacao.pdf
+  ```
+
+  3. Re-upload com force (deve sobrescrever):
+  ```
+  curl -X POST -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+    -F "file=@samples/plano_ensino_programacao.pdf" \
+    -F "titulo=Plano de Ensino - Programação I (v2)" \
+    -F "force=true" \
+    -F "uploaded_by=admin" \
+    http://localhost:8000/api/v1/artefatos/upload
+  ```
+
+  4. Re-upload SEM force (deve dar 409):
+  ```
+  curl -X POST -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+    -F "file=@samples/plano_ensino_programacao.pdf" \
+    -F "titulo=Teste conflito" \
+    -F "uploaded_by=admin" \
+    http://localhost:8000/api/v1/artefatos/upload
+  ```
+  Resposta esperada: HTTP 409 `{"success": false, "error": "Artefato já existe: ..."}`
 
 ### T-09: CLI ingest
 - [x] Comando `iuna ingest --source-type <tipo> --directory <path> [--force] [--concurrency N]`
@@ -101,7 +198,46 @@
 - [x] Flag `--enrich` (por agora stub: print "enrich not implemented yet")
 - [x] `--force` para sobrescrever existentes. Sem `--force` → pula se filename já existe.
 - [x] Progresso no terminal.
-- [ ] **Validar**: `iuna ingest --source-type artefatos --directory ./samples/` → PDFs indexados. Conferir no ES.
+- [ ] **Validar** (ES online):
+  1. Ingestar artefatos do diretório samples:
+  ```
+  source .venv/bin/activate
+  python -m app.cli.main ingest --source-type artefatos --directory ./samples/
+  ```
+  Saída esperada:
+  ```
+  📂 Encontrados 3 arquivos PDF em: ./samples/
+  📌 Tipo: artefatos | Force: False | Concurrency: 3
+  
+    ✅ [1/3] documento_institucional.pdf
+    ✅ [2/3] edital_selecao.pdf
+    ✅ [3/3] plano_ensino_programacao.pdf
+  
+  🏁 Ingestão finalizada: 3 sucesso, 0 erro(s)
+  ```
+
+  2. Rodar de novo SEM --force (deve pular por conflito):
+  ```
+  python -m app.cli.main ingest --source-type artefatos --directory ./samples/
+  ```
+  Saída esperada: erros de conflito (409) para cada arquivo.
+
+  3. Rodar com --force (deve sobrescrever):
+  ```
+  python -m app.cli.main ingest --source-type artefatos --directory ./samples/ --force
+  ```
+  Saída esperada: 3 sucesso.
+
+  4. Verificar no ES que os docs existem:
+  ```
+  curl -H "Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=" \
+    "https://elastic.pnld-avaliacao-dev.nees.ufal.br/artefatos/_count"
+  ```
+
+  5. Testar com documentos_ifal_v2:
+  ```
+  python -m app.cli.main ingest --source-type documentos_ifal_v2 --directory ./samples/ --force
+  ```
 
 ---
 
@@ -142,7 +278,54 @@
 - [ ] Flags: `--summarize`, `--vectorize`, `--entities`, `--keywords`, `--chunk`, `--enrich`
 - [ ] `--force`, `--skip-existing`, `--concurrency N`
 - [ ] Atualizar `iuna ingest --enrich` para chamar enrich_all após indexar
-- [ ] **Validar**: `iuna enrich --source-type artefatos --ids <id> --enrich` → doc totalmente enriquecido
+- [ ] **Validar** (ES + Gemini online):
+  ```
+  source .venv/bin/activate
+
+  # Teste 1: Enriquecer um único doc por ID (todas as operações)
+  python -m app.cli.main enrich --source-type artefatos --ids <ARTEFATO_ID> --enrich
+  # Esperado: executa entidades → keywords → resumo → vetorização → chunking (se ≥10k)
+  # Mostra progresso para cada operação
+
+  # Teste 2: Enriquecer apenas resumo
+  python -m app.cli.main enrich --source-type artefatos --ids <ID> --summarize
+  # Esperado: gera apenas resumo, mostra ✅
+
+  # Teste 3: Enriquecer apenas entidades + keywords
+  python -m app.cli.main enrich --source-type artefatos --ids <ID> --entities --keywords
+  # Esperado: extrai entidades e keywords, mostra ✅
+
+  # Teste 4: Enriquecer diretório inteiro
+  python -m app.cli.main enrich --source-type artefatos --directory ./samples/ --enrich
+  # Esperado: processa cada arquivo da pasta (por filename), mostra [1/3], [2/3], [3/3]
+
+  # Teste 5: --skip-existing (pula docs já enriquecidos)
+  python -m app.cli.main enrich --source-type artefatos --directory ./samples/ --enrich --skip-existing
+  # Esperado: ⏭ para docs que já têm resumo_at preenchido
+
+  # Teste 6: --force (re-enriquece tudo)
+  python -m app.cli.main enrich --source-type artefatos --ids <ID> --enrich --force
+  # Esperado: sobrescreve resumo, entidades, vetor, chunks existentes
+
+  # Teste 7: Verificar enriquecimento no ES
+  curl -H "Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=" \
+    "https://elastic.pnld-avaliacao-dev.nees.ufal.br/artefatos/<ID>?pretty"
+  # Esperado: artefato.resumo preenchido, artefato.entidades[], artefato.keywords[], 
+  #           artefato.embedding_vector[], artefato.chunking_at preenchido
+
+  # Teste 8: Verificar chunks criados
+  curl -H "Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=" \
+    "https://elastic.pnld-avaliacao-dev.nees.ufal.br/artefatos_chunks/_search?q=parent_document_id:<ID>&pretty"
+  # Esperado: chunks com content e embedding_vector preenchidos
+
+  # Teste 9: iuna ingest --enrich (indexa + enriquece de uma vez)
+  python -m app.cli.main ingest --source-type artefatos --directory ./samples/ --force --enrich
+  # Esperado: indexa cada PDF, depois enriquece, mostra ambos os passos
+
+  # Teste 10: Concorrência
+  python -m app.cli.main enrich --source-type artefatos --directory ./samples/ --enrich --concurrency 1
+  # Esperado: processa sequencialmente (1 por vez)
+  ```
 
 ---
 
@@ -269,7 +452,7 @@
 ## Bloco 8 — Testes obrigatórios (1ª rodada)
 
 ### T-28: Testes unitários core
-- [ ] test_pdf_extractor.py (PDF válido, corrompido, sem texto)
+- [ ] test_pdf_extractor_local.py (PDF válido, corrompido, sem texto)
 - [ ] test_query_helpers.py (funções retornam dicts corretos)
 - [ ] test_scoring.py (pesos corretos, increment funciona)
 - [ ] test_enrichment_service.py (com LLM mock):
@@ -312,11 +495,99 @@
 - [ ] popularity_score influencia ranking
 
 ### T-33: CLI completo
-- [ ] `iuna ingest --directory` → indexa N PDFs com progresso
-- [ ] `iuna ingest --enrich` → indexa + enriquece
-- [ ] `iuna enrich --skip-existing` → pula docs já processados
-- [ ] `iuna stats` → output correto
-- [ ] `iuna delete` → remove doc + chunks
+- [ ] Ingestão em lote:
+  ```
+  python -m app.cli.main ingest --source-type artefatos --directory ./samples/
+  ```
+  Verificar: progresso exibido, PDFs indexados, contagem correta no ES.
+
+- [ ] Ingestão com --force:
+  ```
+  python -m app.cli.main ingest --source-type artefatos --directory ./samples/ --force
+  ```
+  Verificar: sobrescreve existentes sem erro.
+
+- [ ] Ingestão + enriquecimento (após T-13 implementado):
+  ```
+  python -m app.cli.main ingest --source-type artefatos --directory ./samples/ --force --enrich
+  ```
+  Verificar: após indexar, cada doc é enriquecido (entidades, keywords, resumo, vector, chunks).
+
+- [ ] Enriquecimento seletivo:
+  ```
+  python -m app.cli.main enrich --source-type artefatos --ids <ID1>,<ID2> --summarize --entities
+  ```
+  Verificar: só resumo e entidades gerados, demais campos inalterados.
+
+- [ ] Skip existing:
+  ```
+  python -m app.cli.main enrich --source-type artefatos --directory ./samples/ --enrich --skip-existing
+  ```
+  Verificar: docs já enriquecidos são pulados (verifica `*_at`).
+
+- [ ] Stats:
+  ```
+  python -m app.cli.main stats
+  ```
+  Saída esperada:
+  ```
+  📊 Estatísticas IUNA API
+  
+  documentos_ifal_v2: 2512 docs | sem_resumo: 2512 | sem_entidades: 2512 | sem_embedding: 2512 | sem_chunking: 2512
+  artefatos: 3 docs | sem_resumo: 3 | sem_entidades: 3 | sem_embedding: 3 | sem_chunking: 3
+  chunks: documentos_ifal_v2_chunks: 0 | artefatos_chunks: 0
+  ```
+
+- [ ] Delete:
+  ```
+  python -m app.cli.main delete --source-type artefatos --id <ARTEFATO_ID>
+  ```
+  Verificar: doc removido + chunks removidos.
+
+- [ ] Setup-indices com sufixo:
+  ```
+  python -m app.cli.main setup-indices --suffix _test
+  ```
+  Verificar: 5 índices `*_test` criados. Depois limpar:
+  ```
+  python -m app.cli.main setup-indices --suffix _test --recreate
+  ```
+
+- [ ] **Testes de borda — CLI**:
+  ```
+  # Diretório inexistente
+  python -m app.cli.main ingest --source-type artefatos --directory ./nao_existe/
+  # Esperado: ❌ Diretório não encontrado (exit code 1)
+
+  # Diretório sem PDFs
+  mkdir -p /tmp/vazio && python -m app.cli.main ingest --source-type artefatos --directory /tmp/vazio/
+  # Esperado: ⚠️ Nenhum arquivo PDF encontrado (exit code 0)
+
+  # source-type inválido
+  python -m app.cli.main ingest --source-type invalido --directory ./samples/
+  # Esperado: ❌ source-type inválido (exit code 1)
+
+  # ES offline → erro de conexão
+  # (temporariamente alterar ELASTICSEARCH_HOSTS no .env para host errado)
+  python -m app.cli.main ingest --source-type artefatos --directory ./samples/
+  # Esperado: ❌ Erro ao conectar ao Elasticsearch (exit code 1)
+
+  # ID inexistente no enrich
+  python -m app.cli.main enrich --source-type artefatos --ids id-fantasma --enrich
+  # Esperado: ❌ NotFoundError
+
+  # --recreate com confirmação 'n' → cancela
+  python -m app.cli.main setup-indices --recreate
+  # Digitar: n → Esperado: Operação cancelada.
+
+  # Enrich sem flags de operação
+  python -m app.cli.main enrich --source-type artefatos --ids <ID>
+  # Esperado: ⚠️ Nenhuma operação selecionada (ou erro)
+
+  # Doc pequeno → chunking pulado
+  python -m app.cli.main enrich --source-type artefatos --ids <ID_PEQUENO> --chunk
+  # Esperado: ⏭ content < 10000 chars, chunking pulado
+  ```
 
 ---
 

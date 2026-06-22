@@ -18,7 +18,7 @@ A IUNA API é uma API REST construída com FastAPI para processamento inteligent
 
 ### 1.1 Tipos de Objeto
 
-**`documentos` (índice `documentos_ifal`)** — Documentos com metadados ricos:
+**`documentos` (índice `documentos_ifal_v2`)** — Documentos com metadados ricos:
 - Estrutura: `ato.titulo`, `ato.ementa`, `ato.fonte.*`, `ato.tipo_doc`, `ato.ano`, `ato.data_publicacao`, etc.
 - Exemplos: editais, portarias, resoluções, regulamentos, atas, memorandos, ofícios, pareceres, contratos, convênios, apostilas, livros, planos de ensino, projetos de pesquisa/extensão, TCC.
 - Busca rica com filtros por tipo, órgão, esfera, ano, etc.
@@ -88,7 +88,7 @@ A IUNA API é uma API REST construída com FastAPI para processamento inteligent
 - **RF-02b.6**: `GET /api/v1/artefatos/by-filename/{filename}` → por `filename.keyword`.
 
 #### RF-02a — Deleção de Documentos
-- **RF-02a.7**: `DELETE /api/v1/documentos/{document_id}` remove documento + chunks em `documentos_ifal_chunks`.
+- **RF-02a.7**: `DELETE /api/v1/documentos/{document_id}` remove documento + chunks em `documentos_ifal_v2_chunks`.
 
 #### RF-02b — Deleção de Artefatos
 - **RF-02b.7**: `DELETE /api/v1/artefatos/{artefato_id}` remove artefato + chunks em `artefatos_chunks`.
@@ -187,14 +187,14 @@ Todas as operações deste módulo funcionam para ambos os tipos de objeto via `
 - **RF-04u.15_k**: Keywords são termos-chave/conceitos relevantes extraídos pelo LLM (ex: "licitação", "processo seletivo", "ética pública"). Diferem de entidades: não são nomes próprios, não têm categoria.
 - **RF-04u.16_k**: Grava como array de strings em `{root}.keywords` + `{root}.keywords_at`.
 - **RF-04u.17_k**: Keywords usadas na busca full-text (campo adicional no `should` com boost) e como faceta/filtro.
-- **RF-04u.18_k**: Para `documentos_ifal`, keywords complementam o campo `ato.tags` existente.
+- **RF-04u.18_k**: Para `documentos_ifal_v2`, keywords complementam o campo `ato.tags` existente.
 - **RF-04u.19_k**: Busca por keyword: `GET /api/v1/{tipo}/search/by-keyword?keyword=<termo>`.
 
 #### RF-04u — Segmentação (Chunking)
 - **RF-04u.12**: `POST /api/v1/{tipo}/chunking/generate`.
 - **RF-04u.13**: Tamanho padrão: **3000 caracteres** (~1 página). Overlap: **500 caracteres**.
 - **RF-04u.14**: `chunk_size` mínimo 3000. Menor → HTTP 422.
-- **RF-04u.15**: Indexa chunks no índice correspondente (`documentos_ifal_chunks` ou `artefatos_chunks`) com: `parent_document_id`, `parent_filename`, `chunk_index`, `content`, `total_chunks`, `embedding_vector`.
+- **RF-04u.15**: Indexa chunks no índice correspondente (`documentos_ifal_v2_chunks` ou `artefatos_chunks`) com: `parent_document_id`, `parent_filename`, `chunk_index`, `content`, `total_chunks`, `embedding_vector`.
 - **RF-04u.16**: Invoca VectorService para embedding de cada chunk.
 - **RF-04u.17**: Atualiza `chunking_at` + `total_chunks` no documento pai.
 - **RF-04u.18**: `artefatos` é o **alvo principal** de chunking.
@@ -297,8 +297,8 @@ Todas as operações deste módulo funcionam para ambos os tipos de objeto via `
 - **RNF-05.3**: CLI e API compartilham os mesmos Services.
 
 ### RNF-06 — Índices Elasticsearch
-- **RNF-06.1**: `documentos_ifal` — `elastic/documentos_ifal_mapping.json` + enriquecimento (`ato.resumo`, `ato.embedding_vector`, `ato.entidades`, timestamps `*_at`).
-- **RNF-06.2**: `documentos_ifal_chunks` — `elastic/documentos_ifal_chunks_mapping.json`.
+- **RNF-06.1**: `documentos_ifal_v2` — `elastic/documentos_ifal_v2_mapping.json` + enriquecimento (`ato.resumo`, `ato.embedding_vector`, `ato.entidades`, timestamps `*_at`).
+- **RNF-06.2**: `documentos_ifal_v2_chunks` — `elastic/documentos_ifal_v2_mapping_chunks.json`.
 - **RNF-06.3**: `artefatos` — `elastic/artefatos_mapping.json` (alvo principal de chunking).
 - **RNF-06.4**: `artefatos_chunks` — `elastic/artefatos_chunks_mapping.json`.
 - **RNF-06.5**: `chat_sessions` — `elastic/chat_sessions_mapping.json`.

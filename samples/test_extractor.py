@@ -10,7 +10,7 @@ import sys
 # Ensure project root is in path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.core.pdf_extractor import extract_pdf_text
+from app.core.pdf_extractor_local import extract_pdf_text
 
 
 def test_extract_from_file(filepath: str) -> None:

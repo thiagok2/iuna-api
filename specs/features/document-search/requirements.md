@@ -2,7 +2,7 @@
 
 ## Introdução
 
-Este módulo implementa os controladores e serviços de busca para documentos armazenados no Elasticsearch (índice `documentos_ifal`). O escopo abrange documentos institucionais (editais, portarias, resoluções, regulamentos, atas, memorandos, ofícios, pareceres, contratos, convênios), materiais didáticos (apostilas, livros, planos de ensino, guias de estudo, slides, roteiros de aula) e propostas de projeto de submissão (projetos de pesquisa, extensão, inovação, TCC). Todas as operações possuem duplo ponto de entrada: API HTTP (controllers) e CLI/Batch (usando o filename como identificador para leitura e escrita sobre diretórios completos). O módulo também inclui a segmentação (chunking) de documentos em blocos maiores (~3000 caracteres / 1 página) com busca integrada em TODOS os blocos de um documento segmentado.
+Este módulo implementa os controladores e serviços de busca para documentos armazenados no Elasticsearch (índice `documentos_ifal_v2`). O escopo abrange documentos institucionais (editais, portarias, resoluções, regulamentos, atas, memorandos, ofícios, pareceres, contratos, convênios), materiais didáticos (apostilas, livros, planos de ensino, guias de estudo, slides, roteiros de aula) e propostas de projeto de submissão (projetos de pesquisa, extensão, inovação, TCC). Todas as operações possuem duplo ponto de entrada: API HTTP (controllers) e CLI/Batch (usando o filename como identificador para leitura e escrita sobre diretórios completos). O módulo também inclui a segmentação (chunking) de documentos em blocos maiores (~3000 caracteres / 1 página) com busca integrada em TODOS os blocos de um documento segmentado.
 
 ## Glossário
 
@@ -11,8 +11,8 @@ Este módulo implementa os controladores e serviços de busca para documentos ar
 - **ES_Client**: Cliente de infraestrutura que se comunica diretamente com o cluster Elasticsearch.
 - **CLI_Runner**: Componente de linha de comando que executa operações em lote (batch) sobre diretórios de arquivos, usando o filename como identificador.
 - **Chunking_Service**: Serviço responsável por segmentar textos de documentos em blocos (chunks) de tamanho configurável.
-- **Documento**: Registro indexado no Elasticsearch (índice `documentos_ifal`) representando qualquer tipo de documento do IFAL — institucional, didático ou proposta de projeto.
-- **Chunk**: Fragmento de texto gerado pela segmentação de um documento, armazenado no índice `documentos_ifal_chunks` com referência ao documento pai.
+- **Documento**: Registro indexado no Elasticsearch (índice `documentos_ifal_v2`) representando qualquer tipo de documento do IFAL — institucional, didático ou proposta de projeto.
+- **Chunk**: Fragmento de texto gerado pela segmentação de um documento, armazenado no índice `documentos_ifal_v2_chunks` com referência ao documento pai.
 - **Faceta**: Agregação de valores de um campo específico do índice, usada para navegação filtrada (ex: tipos de documento, órgãos, anos).
 - **Filename**: Nome do arquivo físico do documento, usado como identificador único em operações CLI/Batch sobre diretórios.
 - **Full_Text_Search**: Busca textual completa usando o motor BM25 do Elasticsearch sobre campos text.
@@ -28,7 +28,7 @@ Este módulo implementa os controladores e serviços de busca para documentos ar
 #### Critérios de Aceitação
 
 1. WHEN uma requisição GET é recebida em `/api/v1/search` com o parâmetro `q` (query string), THE Search_Controller SHALL delegar a busca ao Search_Service e retornar os documentos correspondentes em formato JSON paginado.
-2. WHEN o parâmetro `q` é fornecido, THE Search_Service SHALL executar uma busca full-text BM25 nos campos `ato.titulo`, `ato.ementa`, `attachment.content` e `ato.tags` do índice `documentos_ifal`.
+2. WHEN o parâmetro `q` é fornecido, THE Search_Service SHALL executar uma busca full-text BM25 nos campos `ato.titulo`, `ato.ementa`, `attachment.content` e `ato.tags` do índice `documentos_ifal_v2`.
 3. WHEN o parâmetro `q` está vazio ou ausente, THE Search_Controller SHALL retornar erro HTTP 400 com mensagem descritiva indicando que o termo de busca é obrigatório.
 4. THE Search_Service SHALL retornar os resultados ordenados por relevância (_score) do Elasticsearch por padrão.
 5. WHEN os parâmetros `page` (padrão: 1) e `page_size` (padrão: 20) são fornecidos, THE Search_Service SHALL aplicar paginação offset-based nos resultados retornados.
@@ -72,7 +72,7 @@ Este módulo implementa os controladores e serviços de busca para documentos ar
 
 #### Critérios de Aceitação
 
-1. WHEN uma requisição GET é recebida em `/api/v1/search/{document_id}`, THE Search_Controller SHALL retornar o documento completo do índice `documentos_ifal` correspondente ao `ato.ato_id` fornecido.
+1. WHEN uma requisição GET é recebida em `/api/v1/search/{document_id}`, THE Search_Controller SHALL retornar o documento completo do índice `documentos_ifal_v2` correspondente ao `ato.ato_id` fornecido.
 2. WHEN uma requisição GET é recebida em `/api/v1/search/by-filename/{filename}`, THE Search_Controller SHALL retornar o documento correspondente ao campo `filename.keyword` fornecido.
 3. IF o `document_id` ou `filename` fornecido não corresponder a nenhum documento indexado, THEN THE Search_Controller SHALL retornar erro HTTP 404 com mensagem descritiva.
 4. THE Search_Controller SHALL retornar todos os campos do documento (_source) no corpo da resposta JSON.
@@ -89,7 +89,7 @@ Este módulo implementa os controladores e serviços de busca para documentos ar
 2. THE Chunking_Service SHALL usar tamanho de chunk padrão de 3000 caracteres (aproximadamente 1 página) e sobreposição (overlap) padrão de 500 caracteres.
 3. WHEN parâmetros opcionais `chunk_size` (mínimo: 3000) e `chunk_overlap` são fornecidos na requisição, THE Chunking_Service SHALL usar os valores especificados pelo usuário, validando que `chunk_size` é maior ou igual a 3000.
 4. IF o valor de `chunk_size` fornecido for menor que 3000, THEN THE Search_Controller SHALL retornar erro HTTP 422 com mensagem indicando que o tamanho mínimo de chunk é 3000 caracteres.
-5. WHEN a segmentação é concluída, THE Chunking_Service SHALL indexar cada chunk no índice `documentos_ifal_chunks` com os campos: `parent_document_id` (referência ao documento pai via `ato.ato_id`), `parent_filename` (filename do documento pai), `chunk_index` (posição sequencial), `content` (texto do bloco) e `total_chunks` (número total de blocos gerados).
+5. WHEN a segmentação é concluída, THE Chunking_Service SHALL indexar cada chunk no índice `documentos_ifal_v2_chunks` com os campos: `parent_document_id` (referência ao documento pai via `ato.ato_id`), `parent_filename` (filename do documento pai), `chunk_index` (posição sequencial), `content` (texto do bloco) e `total_chunks` (número total de blocos gerados).
 6. THE Chunking_Service SHALL preservar a associação entre todos os chunks e o documento pai para garantir busca completa em todos os blocos.
 
 ---
@@ -100,7 +100,7 @@ Este módulo implementa os controladores e serviços de busca para documentos ar
 
 #### Critérios de Aceitação
 
-1. WHEN uma requisição GET é recebida em `/api/v1/search/chunks` com o parâmetro `q`, THE Search_Controller SHALL executar busca full-text no índice `documentos_ifal_chunks` sobre o campo `content`.
+1. WHEN uma requisição GET é recebida em `/api/v1/search/chunks` com o parâmetro `q`, THE Search_Controller SHALL executar busca full-text no índice `documentos_ifal_v2_chunks` sobre o campo `content`.
 2. THE Search_Service SHALL retornar para cada resultado de chunk: o conteúdo do chunk, o `chunk_index`, o `parent_document_id`, o `parent_filename` e o `total_chunks` do documento pai.
 3. WHEN o parâmetro `document_id` ou `filename` é fornecido junto com `q`, THE Search_Service SHALL restringir a busca de chunks apenas aos blocos associados ao documento pai especificado.
 4. THE Search_Service SHALL agrupar os resultados de chunks por documento pai, indicando em quais blocos o termo foi encontrado e a relevância de cada bloco.
