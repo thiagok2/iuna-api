@@ -1,275 +1,349 @@
-# ✅ Backlog de Tarefas - IUNA API (adaptado para Claude)
+# 📋 Tasks — IUNA API
 
-**Projeto**: IUNA API  
-**Instituição**: IFAL - Instituto Federal de Alagoas  
-**Versão**: 1.0.0  
-**Última Atualização**: 2026-05-28
+**Versão**: 2.0.0  
+**Princípio**: Blocos testáveis. Após cada bloco, algo funcional está rodando e pode ser validado manualmente.
 
 ---
 
-> **Legenda de Status**:  
-> `[ ]` Pendente  |  `[ / ]` Em progresso  |  `[x]` Concluído  |  `[-]` Bloqueado
+## Bloco 1 — Esqueleto (API + CLI + ES conectados)
 
-> **Legenda de Prioridade**: 🔴 Crítico  |  🟡 Alta  |  🟢 Normal
+> **Ao final deste bloco**: API respondendo, CLI executando, ES conectado, índices criados, PDFs de exemplo prontos para submissão.
 
----
+### T-01: Config + Dependências + .env
+- [ ] Atualizar `app/config.py` (todas as variáveis: API_SECRET_TOKEN, ES_*, LLM_*, RASA_*, CHAT_*, BATCH_*)
+- [ ] Properties para nomes de índice (`index_documentos`, `index_artefatos`, etc.)
+- [ ] Criar `.env.example` completo
+- [ ] Atualizar `requirements.txt` / `pyproject.toml`: fastapi, uvicorn, pydantic-settings, elasticsearch[async], httpx, pdfplumber, PyPDF2, typer, python-multipart
+- [ ] **Validar**: app inicia sem erro com `uvicorn app.main:app`
 
-## ⚙️ Setup Inicial do Projeto (pré-requisito de todos os módulos)
+### T-02: ESClient + Health
+- [ ] Criar `app/clients/es_client.py` (AsyncElasticsearch singleton)
+- [ ] Métodos: connect, close, ping, search, get, index, update, delete, delete_by_query, bulk_index, create_index, delete_index
+- [ ] Startup/shutdown no `app/main.py`
+- [ ] Criar `app/api/routers/health.py`:
+  - `GET /health-check` → 200 (sem auth)
+  - `GET /info` → nome/versão (sem auth)
+  - `GET /api/v1/health` → verifica ES (acessível/inacessível)
+- [ ] **Validar**: `curl localhost:8000/api/v1/health` → mostra status do ES
 
-> Executar uma única vez antes de qualquer módulo. Não depende de nenhuma task de negócio.
+### T-03: Auth middleware + X-Request-Id
+- [ ] Dependency `verify_token` (compara Bearer com API_SECRET_TOKEN)
+- [ ] Middleware `RequestIdMiddleware`
+- [ ] Exception handlers globais (NotFound, Conflict, Unauthorized, ServiceUnavailable)
+- [ ] **Validar**: curl sem token → 401. Com token → passa. Response tem X-Request-Id.
 
-- [ ] 🔴 Instalar dependências do projeto no virtualenv
-  - `pip install -r requirements.txt`
-  - Verificar que `.venv/bin/pytest` e `.venv/bin/uvicorn` funcionam
+### T-04: CLI setup-indices
+- [ ] Criar `app/cli/main.py` (Typer)
+- [ ] Comando `iuna setup-indices [--suffix _test] [--recreate]`
+- [ ] Lê `elastic/*.json`, cria cada índice **apenas se não existir** (verifica antes). Com `--recreate` deleta e recria.
+- [ ] **Validar**: `python -m app.cli.main setup-indices` → índices criados no ES (verificar via Kibana/curl)
 
-- [ ] 🔴 Criar `.env` local a partir do template abaixo (nunca versionar)
-  ```env
-  PROJECT_NAME="IUNA API"
-  API_V1_STR="/api/v1"
-  SECRET_KEY=                        # gerar: python3 -c "import secrets; print(secrets.token_hex(32))"
-  JWT_ALGORITHM="HS256"
-  ACCESS_TOKEN_EXPIRE_MINUTES=60
-  ELASTICSEARCH_HOSTS="https://seu-elastic:9200"
-  ELASTICSEARCH_USER=elastic
-  ELASTICSEARCH_PASSWORD=
-  # LLM — escolher um provedor (default: gemini)
-  ACTIVE_LLM_PROVIDER="gemini"
-  GEMINI_API_KEY=                    # chave Google AI Studio
-  CLAUDE_API_KEY=                    # chave Anthropic (opcional)
-  OLLAMA_BASE_URL="http://localhost:11434"   # apenas se usar Ollama local
-  OLLAMA_MODEL="llama3"              # modelo padrão do Ollama
-  RASA_API_URL="http://rasa:5005"
-  ```
+### T-05: PDF Extractor + samples/
+- [ ] Criar `app/core/pdf_extractor.py` (pdfplumber + fallback PyPDF2)
+- [ ] Criar pasta `samples/` com 3-5 PDFs de exemplo (docs institucionais + artefatos genéricos)
+- [ ] Script de teste: `python -c "from app.core.pdf_extractor import ...; print(extract(open('samples/exemplo.pdf','rb').read())[:200])"`
+- [ ] **Validar**: texto extraído de PDF de exemplo
 
-- [ ] 🔴 Criar `.env.example` na raiz com as mesmas chaves e valores em branco (para versionar como referência)
-
-- [ ] 🔴 Confirmar que `.env` está no `.gitignore`
-  - `grep '\.env' .gitignore`
-
-- [ ] 🟡 Adicionar dependências ausentes ao `requirements.txt` conforme os módulos forem sendo implementados
-  - `python-jose[cryptography]>=3.3.0` — JWT (Módulo 0)
-  - `passlib[bcrypt]>=1.7.4` — hash de senhas (Módulo 0)
-  - `python-multipart>=0.0.9` — OAuth2 form data (Módulo 0)
-  - `typer>=0.12.0` — CLI Batch (Módulo 5)
-
-- [ ] 🟢 Rodar os testes do scaffold para confirmar ambiente OK
-  - `.venv/bin/pytest tests/ -v` — deve passar 3 testes
-
----
-
-## 🏗️ Módulo 0 — Infraestrutura e Configuração Base
-
-- [ ] 🔴 Criar arquivo `.env.example` com todas as variáveis listadas no `design.md`
-- [ ] 🔴 Garantir que `.env` está listado no `.gitignore`
-- [ ] 🔴 Atualizar `app/config.py` com todas as novas variáveis (`ELASTICSEARCH_*`, `CLAUDE_API_KEY`, `RASA_API_URL`, `SECRET_KEY`, `JWT_ALGORITHM`, `ACCESS_TOKEN_EXPIRE_MINUTES`)
-- [ ] 🔴 Criar `app/core/security.py` com funções:
-  - `create_access_token(data: dict, expires_delta: timedelta) -> str`
-  - `verify_token(token: str) -> dict`
-  - `hash_password(password: str) -> str`
-  - `verify_password(plain: str, hashed: str) -> bool`
-- [ ] 🟡 Criar `app/api/dependencies.py` com:
-  - `get_current_user(token: str = Depends(oauth2_scheme)) -> User`
-- [ ] 🟡 Criar `app/api/v1/auth.py` com:
-  - `POST /auth/token` (recebe `username` e `password`, retorna JWT)
-- [ ] 🟡 Atualizar `app/main.py` para incluir todos os routers de `v1/` sob o prefixo `/api/v1`
-- [ ] 🟢 Criar `app/api/v1/__init__.py`
+### T-06: Stubs de TODAS as rotas (retornam 501)
+- [ ] Criar todos os routers com endpoints stub (HTTP 501 "Not Implemented"):
+  - `crud_documentos.py`, `crud_artefatos.py`
+  - `search_documentos.py`, `search_artefatos.py`
+  - `enrichment_documentos.py`, `enrichment_artefatos.py`
+  - `chat.py`, `stats.py`
+- [ ] Registrar todos em `app/main.py`
+- [ ] **Validar**: Abrir `/docs` (Swagger) → TODAS as 54 rotas visíveis
 
 ---
 
-## 🔌 Módulo 1 — Clients de Infraestrutura
+## Bloco 2 — Ingestão funcional (indexar PDFs via CLI e API)
 
-### Elasticsearch Client (`app/clients/elasticsearch.py`)
-- [ ] 🔴 Criar classe `ElasticsearchClient` com:
-  - `get(index: str, doc_id: str) -> dict` — busca documento por ID
-  - `update(index: str, doc_id: str, fields: dict) -> None` — atualiza campos do documento (partial update)
-  - `search_knn(index: str, vector: list[float], top_k: int, filter_ids: list[str] | None) -> list[dict]` — busca vetorial kNN no índice de chunks
-- [ ] 🔴 Inicializar o client Elasticsearch com `ELASTICSEARCH_HOSTS`, `ELASTICSEARCH_USER` e `ELASTICSEARCH_PASSWORD` da config
-- [ ] 🟡 Tratar erros de conexão com exceções customizadas
+> **Ao final deste bloco**: PDFs podem ser submetidos e aparecem no ES. Busca por ID/filename funciona.
 
-### Rasa Client (`app/clients/rasa.py`)
-- [ ] 🔴 Criar classe `RasaClient` com:
-  - `parse_message(text: str) -> dict` — envia mensagem ao `POST /model/parse` do Rasa e retorna `{ intent, entities }`
-- [ ] 🟡 Inicializar o client com `RASA_API_URL` da config
-- [ ] 🟡 Tratar erros de conexão e timeout com log de aviso
+### T-07: DocumentosCrudService + Router
+- [ ] Criar `app/services/documentos_crud.py`:
+  - `upload(file_bytes, filename, metadados_opcionais)` → extrai texto, indexa
+  - `get_by_id`, `get_by_filename`, `delete` (+ chunks)
+  - `list_all(page, page_size)`, `update_metadata(id, fields)`
+- [ ] Substituir stubs em `crud_documentos.py`:
+  - `POST /documentos/upload` (multipart)
+  - `GET /documentos/{id}`, `GET /documentos/by-filename/{filename}`
+  - `GET /documentos` (listagem paginada)
+  - `PATCH /documentos/{id}`, `DELETE /documentos/{id}`
+- [ ] **Validar**: Upload PDF via Swagger → doc aparece no ES. GET retorna.
 
----
+### T-08: ArtefatosCrudService + Router
+- [ ] Criar `app/services/artefatos_crud.py`:
+  - `upload(file_bytes, filename, titulo, uploaded_by, tipo, tags)` → extrai texto, indexa
+  - `get_by_id`, `get_by_filename`, `delete`, `list_all`, `update_metadata`
+  - Re-upload: deleta chunks antigos antes de reindexar
+- [ ] Substituir stubs em `crud_artefatos.py`
+- [ ] **Validar**: Upload PDF artefato via Swagger → aparece no ES
 
-## 🤖 Módulo 2 — Providers de LLM
-
-### Interface Base (`app/providers/llm/base.py`)
-- [ ] 🔴 Criar classe abstrata `BaseLLMProvider(ABC)` com os métodos abstratos:
-  - `generate_summary(text: str) -> str`
-  - `generate_embedding(text: str) -> list[float]`
-  - `extract_entities(text: str) -> list[dict]`
-  - `generate_chat_response(prompt: str, context: str) -> str`
-- [ ] 🔴 Criar exceção customizada `LLMProviderError(Exception)` no mesmo arquivo
-  - _Requirements: RNF-01.1_
-
-### Implementação Gemini — padrão (`app/providers/llm/gemini.py`)
-- [ ] 🔴 Criar `GeminiProvider(BaseLLMProvider)` usando SDK `google-generativeai`
-- [ ] 🔴 `generate_summary`: modelo `gemini-1.5-flash` com prompt de instrução de resumo em português
-- [ ] 🔴 `generate_embedding`: modelo `models/text-embedding-004`
-- [ ] 🔴 `extract_entities`: modelo `gemini-1.5-flash` com prompt estruturado retornando JSON `[{"texto": str, "categoria": str}]`
-- [ ] 🔴 `generate_chat_response`: modelo `gemini-1.5-flash` com prompt RAG (contexto + pergunta)
-- [ ] 🔴 Toda falha da API Gemini deve ser capturada e relançada como `LLMProviderError`
-- [ ] 🟡 Adicionar `google-generativeai>=0.5.0` ao `requirements.txt`
-  - _Requirements: RNF-01a.1, RNF-01a.2, RNF-01a.3_
-
-### Implementação Claude — Anthropic (`app/providers/llm/claude.py`)
-- [ ] 🔴 Criar `ClaudeProvider(BaseLLMProvider)` usando SDK `anthropic`
-- [ ] 🔴 `generate_summary`: usar `messages.create` com prompt de resumo
-- [ ] 🔴 `generate_embedding`: usar endpoint de embeddings compatível (Voyage AI via `anthropic` ou modelo externo)
-- [ ] 🔴 `extract_entities`: `messages.create` com prompt estruturado retornando JSON de entidades
-- [ ] 🔴 `generate_chat_response`: `messages.create` com prompt RAG
-- [ ] 🔴 Toda falha da API Claude deve ser relançada como `LLMProviderError`
-- [ ] 🟡 Confirmar que `anthropic>=1.0.0` está no `requirements.txt` (já está)
-  - _Requirements: RNF-01a.4, RNF-01a.5_
-
-### Implementação Ollama — local (`app/providers/llm/ollama.py`)
-- [ ] 🔴 Criar `OllamaProvider(BaseLLMProvider)` usando SDK `ollama`
-- [ ] 🔴 `__init__`: receber `base_url: str` e `model: str`; inicializar `ollama.Client(host=base_url)`
-- [ ] 🔴 `generate_summary`: `client.generate(model=self.model, prompt=...)` com prompt de resumo
-- [ ] 🔴 `generate_embedding`: `client.embeddings(model="nomic-embed-text", prompt=text)` — usar modelo de embedding dedicado
-- [ ] 🔴 `extract_entities`: `client.generate` com prompt estruturado retornando JSON de entidades
-- [ ] 🔴 `generate_chat_response`: `client.generate` com prompt RAG
-- [ ] 🔴 Tratar `ConnectionError` (Ollama não disponível) relançando como `LLMProviderError` com mensagem clara
-- [ ] 🟡 Adicionar `ollama>=0.2.0` ao `requirements.txt`
-  - _Requirements: RNF-01a.6, RNF-01a.7, RNF-01a.8, RNF-01a.9_
-
-### Factory (`app/providers/llm/factory.py`)
-- [ ] 🔴 Criar `LLMFactory` com método estático `get_provider() -> BaseLLMProvider` selecionando o provedor via `ACTIVE_LLM_PROVIDER`
-- [ ] 🔴 Suportar os valores `"gemini"` (default), `"claude"` e `"ollama"`
-- [ ] 🔴 Lançar `ValueError` com mensagem descritiva para valores não suportados
-  - _Requirements: RNF-01.2, RNF-01.4, RNF-01.5_
+### T-09: CLI ingest
+- [ ] Comando `iuna ingest --source-type <tipo> --directory <path> [--force] [--concurrency N]`
+- [ ] Por default: só indexa (ES only, sem LLM)
+- [ ] Flag `--enrich` (por agora stub: print "enrich not implemented yet")
+- [ ] `--force` para sobrescrever existentes. Sem `--force` → pula se filename já existe.
+- [ ] Progresso no terminal.
+- [ ] **Validar**: `iuna ingest --source-type artefatos --directory ./samples/` → PDFs indexados. Conferir no ES.
 
 ---
 
-## 📝 Módulo 3 — Serviços de Processamento
+## Bloco 3 — LLM Providers + Enriquecimento funcional
 
-### SummaryService (`app/services/summary_service.py`)
-- [ ] 🔴 Criar `SummaryService` com:
-  - `generate_from_text(text: str) -> str` — chama `LLMProvider.generate_summary`
-  - `generate_from_path_id(path_id: str) -> dict` — busca texto no ES, gera resumo, atualiza `artefato.resumo` no ES, retorna resultado
+> **Ao final deste bloco**: Documentos podem ser enriquecidos (resumo, entidades, keywords, embedding, chunks). Validável via API e CLI.
 
-### VectorService (`app/services/vector_service.py`)
-- [ ] 🔴 Criar `VectorService` com:
-  - `generate_from_text(text: str) -> list[float]` — chama `LLMProvider.generate_embedding`
-  - `generate_from_path_id(path_id: str) -> dict` — busca texto no ES, gera vetor, atualiza `artefato.embedding_vector` no ES, retorna resultado
+### T-10: LLM Interface + Factory + primeiro provider
+- [ ] Criar `app/providers/base.py` (BaseLLMProvider ABC async):
+  - generate_summary, generate_embedding, extract_entities, extract_keywords, generate_response, health_check
+- [ ] Criar `app/providers/factory.py`
+- [ ] Implementar primeiro provider funcional (Gemini OU Ollama — o que estiver disponível para testar)
+- [ ] **Validar**: script que chama `generate_summary("texto de teste")` → retorna string
 
-### EntitiesService (`app/services/entities_service.py`)
-- [ ] 🔴 Criar `EntitiesService` com:
-  - `extract_from_text(text: str) -> list[dict]` — chama `LLMProvider.extract_entities`
-  - `extract_from_path_id(path_id: str) -> dict` — busca texto no ES, extrai entidades, atualiza `artefato.entidades` no ES, retorna resultado
+### T-11: EnrichmentService
+- [ ] Criar `app/services/enrichment.py`:
+  - `enrich_summary(index, doc_id, root)`
+  - `enrich_vector(index, doc_id, root)` — usa resumo como input
+  - `enrich_entities(index, doc_id, root)`
+  - `enrich_keywords(index, doc_id, root)`
+  - `enrich_chunks(index, chunks_index, doc_id, root)` — threshold 10k chars
+  - `enrich_all(index, chunks_index, doc_id, root)` — ordem: entidades → keywords → resumo → vetorização → chunking
+- [ ] **Validar**: chamar `enrich_all` em um doc já indexado → campos preenchidos no ES
 
-### ChunkingService (`app/services/chunking_service.py`)
-- [ ] 🔴 Criar `ChunkingService` com:
-  - `split_text(text: str, chunk_size: int, overlap: int) -> list[str]` — algoritmo de divisão com sobreposição (sliding window)
-  - `generate_from_text(text: str, chunk_size: int, overlap: int) -> list[dict]` — divide e retorna lista de chunks com índice
-  - `generate_from_path_id(path_id: str, chunk_size: int, overlap: int) -> dict` — busca texto no ES, divide, vetoriza cada chunk via `VectorService`, indexa cada chunk no índice `artefatos_chunks` com `parent_path_id`, retorna lista de chunks criados
+### T-12: Routers de enriquecimento
+- [ ] Substituir stubs em `enrichment_documentos.py` e `enrichment_artefatos.py`:
+  - POST `/{tipo}/summary/generate`
+  - POST `/{tipo}/vectorization/generate`
+  - POST `/{tipo}/entities/extract`
+  - POST `/{tipo}/keywords/extract`
+  - POST `/{tipo}/chunking/generate`
+  - POST `/{tipo}/{id}/enrich`
+  - GET `/{tipo}/{id}/enrichment-status`
+- [ ] **Validar**: POST /artefatos/summary/generate {document_id} → resumo gerado e gravado no ES
 
-### ChatService (`app/services/chat_service.py`)
-- [ ] 🔴 Criar `ChatService` com:
-  - `process(message: str, session_id: str, path_ids: list[str] | None) -> dict`
-    - Chama `RasaClient.parse_message(message)` para obter `intent` e `entities`
-    - Se `intent == "ask_about_document"`: gera embedding da mensagem, busca chunks no ES via `search_knn`, monta contexto, chama `LLMProvider.generate_chat_response`
-    - Se `intent == "chitchat"` ou outros: chama `LLMProvider.generate_chat_response` sem contexto
-    - Retorna `{ response, session_id, intent }`
-
----
-
-## 🛣️ Módulo 4 — Controllers (Routers FastAPI)
-
-### Auth (`app/api/v1/auth.py`)
-- [ ] 🟡 Implementar `POST /auth/token` com `OAuth2PasswordRequestForm`
-
-### Summary (`app/api/v1/summary.py`)
-- [ ] 🔴 Criar router com `POST /summary/generate`
-- [ ] 🔴 Aceitar body `{ text: str | None, path_id: str | None }` (validar que ao menos um está presente)
-- [ ] 🔴 Chamar `SummaryService.generate_from_text` ou `generate_from_path_id` conforme o input
-- [ ] 🔴 Proteger rota com `Depends(get_current_user)`
-
-### Vectorization (`app/api/v1/vectorization.py`)
-- [ ] 🔴 Criar router com `POST /vectorization/generate`
-- [ ] 🔴 Aceitar body `{ text: str | None, path_id: str | None }`
-- [ ] 🔴 Chamar `VectorService` conforme o input
-- [ ] 🔴 Proteger rota com `Depends(get_current_user)`
-
-### Entities (`app/api/v1/entities.py`)
-- [ ] 🔴 Criar router com `POST /entities/generate`
-- [ ] 🔴 Aceitar body `{ text: str | None, path_id: str | None }`
-- [ ] 🔴 Chamar `EntitiesService` conforme o input
-- [ ] 🔴 Proteger rota com `Depends(get_current_user)`
-
-### Chunking (`app/api/v1/chunking.py`)
-- [ ] 🔴 Criar router com `POST /chunking/generate`
-- [ ] 🔴 Aceitar body `{ text: str | None, path_id: str | None, chunk_size: int = 1000, chunk_overlap: int = 200 }`
-- [ ] 🔴 Chamar `ChunkingService` conforme o input
-- [ ] 🔴 Proteger rota com `Depends(get_current_user)`
-
-### Chat (`app/api/v1/chat.py`)
-- [ ] 🔴 Criar router com `POST /chat/message`
-- [ ] 🔴 Aceitar body `{ message: str, session_id: str, path_ids: list[str] | None }`
-- [ ] 🔴 Chamar `ChatService.process()`
-- [ ] 🔴 Proteger rota com `Depends(get_current_user)`
+### T-13: CLI enrich
+- [ ] Comando `iuna enrich --source-type <tipo> --directory/--ids [flags]`
+- [ ] Flags: `--summarize`, `--vectorize`, `--entities`, `--keywords`, `--chunk`, `--enrich`
+- [ ] `--force`, `--skip-existing`, `--concurrency N`
+- [ ] Atualizar `iuna ingest --enrich` para chamar enrich_all após indexar
+- [ ] **Validar**: `iuna enrich --source-type artefatos --ids <id> --enrich` → doc totalmente enriquecido
 
 ---
 
-## 📦 Módulo 5 — CLI / Batch (`app/cli/batch.py`)
+## Bloco 4 — Busca funcional
 
-- [ ] 🟡 Adicionar `typer` ao `requirements.txt`
-- [ ] 🟡 Criar app CLI com `typer` e comando `process` com parâmetros:
-  - `--action`: `vectorize-all` | `chunk-all` | `summarize-all` | `entities-all` | `process-docs`
-  - `--ids`: lista de IDs separados por vírgula (opcional)
-- [ ] 🟡 Implementar lógica de busca de IDs pendentes no Elasticsearch (documentos onde o campo alvo é `null`)
-- [ ] 🟡 Implementar iteração e chamada dos Services correspondentes para cada ID
+> **Ao final deste bloco**: Busca full-text, filtros, facetas, semelhantes, por entidade, por keyword, chunks e autocomplete funcionando.
+
+### T-14: query_helpers.py
+- [ ] Criar `app/core/query_helpers.py` — funções puras:
+  - build_match_phrase, build_match_fuzzy, build_nested_entity_query
+  - build_highlight, build_term_filter, build_range_filter
+- [ ] **Validar**: import e chamar funções → dicts corretos
+
+### T-15: DocumentosSearchService + Router
+- [ ] Criar `app/services/documentos_search.py`:
+  - search_fulltext (phrase + fuzzy + entidades + keywords + resumo, highlights)
+  - search_facets (agregações em requisição separada)
+  - search_similar (kNN / more_like_this)
+  - search_by_entity (nested query)
+  - search_by_keyword
+  - suggest (autocomplete)
+- [ ] Substituir stubs em `search_documentos.py`
+- [ ] **Validar**: buscar termo de um doc indexado via Swagger → retorna com highlights
+
+### T-16: ArtefatosSearchService + Router
+- [ ] Criar `app/services/artefatos_search.py`:
+  - search_fulltext, search_similar, search_by_entity, search_by_keyword, suggest
+- [ ] Substituir stubs em `search_artefatos.py`
+- [ ] **Validar**: buscar artefato enriquecido → retorna
+
+### T-17: ChunksSearchService + Router
+- [ ] Busca em chunks de ambos os índices
+- [ ] Endpoints: `GET /{tipo}/search/chunks`
+- [ ] **Validar**: buscar termo presente num chunk → retorna chunk com parent_id
+
+### T-18: Scoring (popularity)
+- [ ] Criar `app/core/scoring.py` (constantes SCORE_WEIGHTS)
+- [ ] Endpoints: `POST /{tipo}/{id}/score`
+- [ ] function_score na busca (boost por popularity_score)
+- [ ] **Validar**: score um doc → buscar novamente → ele sobe no ranking
+
+### T-19: Listagem de entidades e keywords
+- [ ] `GET /documentos/entities` e `GET /artefatos/entities` — lista com contagem
+- [ ] `GET /documentos/keywords` e `GET /artefatos/keywords` — lista com contagem (se aplicável)
+- [ ] **Validar**: após enriquecer docs, listar entidades → retorna agregação
 
 ---
 
-## 🦾 Módulo 6 — Rasa (Projeto Separado `./rasa/`)
+## Bloco 5 — Chat funcional
 
-- [ ] 🟡 Criar estrutura de diretórios `./rasa/` com `config.yml`, `domain.yml`, `endpoints.yml`, `data/`
-- [ ] 🟡 Criar `rasa/data/nlu.yml` com exemplos de intenções generalistas:
-  - `ask_about_document` (mínimo 20 exemplos variados)
-  - `chitchat` (mínimo 10 exemplos)
-  - `encerrar` (mínimo 5 exemplos)
-  - `ajuda` (mínimo 5 exemplos)
-- [ ] 🟡 Criar `rasa/domain.yml` declarando todas as intenções
-- [ ] 🟡 Criar `rasa/config.yml` com pipeline NLU (`WhitespaceTokenizer`, `DIETClassifier`)
-- [ ] 🟡 Treinar o modelo inicial via Docker: `docker-compose run --rm rasa rasa train`
+> **Ao final deste bloco**: Chat RAG funcionando com busca híbrida, sessões e contexto dinâmico.
 
----
+### T-20: RasaClient + fallback
+- [ ] Criar `app/clients/rasa_client.py`:
+  - classify_intent(message) → intent name
+  - health_check()
+  - Fallback: se Rasa indisponível → retorna "ask_about_document"
+- [ ] Atualizar `GET /api/v1/health` para incluir status do Rasa
+- [ ] **Validar**: health mostra Rasa status. Fallback funciona sem Rasa rodando.
 
-## 🧪 Módulo 7 — Testes
-
-### Testes Unitários (`tests/unit/`)
-- [ ] 🟡 `test_chunking_service.py`: testar `split_text` com diferentes `chunk_size` e `overlap`
-- [ ] 🟡 `test_vector_service.py`: testar `generate_from_text` com mock do `LLMProvider`
-- [ ] 🟡 `test_summary_service.py`: testar `generate_from_text` com mock do `LLMProvider`
-- [ ] 🟡 `test_entities_service.py`: testar `extract_from_text` com mock do `LLMProvider`
-
-### Testes de Integração (`tests/integration/`)
-- [ ] 🟡 `test_summary_endpoint.py`: testar `POST /summary/generate` com texto e com `path_id` (mock ES e LLM)
-- [ ] 🟡 `test_vectorization_endpoint.py`: testar `POST /vectorization/generate`
-- [ ] 🟡 `test_entities_endpoint.py`: testar `POST /entities/generate`
-- [ ] 🟡 `test_chunking_endpoint.py`: testar `POST /chunking/generate` com `path_id` (verificar indexação de chunks no ES mockado)
-- [ ] 🟡 `test_chat_endpoint.py`: testar `POST /chat/message` com mock do Rasa e do ES
-- [ ] 🟢 `test_api.py`: garantir que `/health-check` e `/info` retornam 200 sem autenticação
+### T-21: ChatService + Router
+- [ ] Criar `app/services/chat.py`:
+  - handle_message: Rasa → decisão (chunks vs texto completo) → busca híbrida RRF → LLM → persistir
+  - load_history, append_to_session
+  - TTL de sessão
+- [ ] Substituir stubs em `chat.py`:
+  - POST /chat/message
+  - GET /chat/sessions/{id}
+  - GET /chat/sessions
+  - DELETE /chat/sessions/{id}
+  - POST /chat/sessions/{id}/add-documento
+  - POST /chat/sessions/{id}/add-artefato
+  - DELETE /chat/sessions/{id}/context
+- [ ] **Validar**: enviar mensagem sobre um doc enriquecido → resposta fundamentada no conteúdo
 
 ---
 
-## 📄 Módulo 8 — Dependências (`requirements.txt`)
+## Bloco 6 — Stats + CLI stats + segundo LLM provider
 
-- [ ] 🔴 Garantir versões fixas das dependências principais:
-  - `fastapi>=0.110.0`
-  - `uvicorn>=0.28.0`
-  - `pydantic-settings>=2.2.0`
-  - `python-jose[cryptography]>=3.3.0`   — JWT
-  - `passlib[bcrypt]>=1.7.4`             — hashing de senhas
-  - `python-multipart>=0.0.9`            — OAuth2 form data
-  - `elasticsearch>=8.12.0`             — client Elasticsearch
-  - `httpx>=0.27.0`                      — client HTTP (Rasa)
-  - `google-generativeai>=0.5.0`         — Gemini SDK (provedor padrão)
-  - `anthropic>=1.0.0`                   — Claude SDK
-  - `ollama>=0.2.0`                      — Ollama SDK (LLM local)
-  - `typer>=0.12.0`                      — CLI Batch
-  - `pytest>=8.1.0`                      — testes
+### T-22: StatsService + Router + CLI
+- [ ] Criar `app/services/stats.py`:
+  - get_stats() → totais por índice, cobertura de enriquecimento
+- [ ] Substituir stub em `stats.py`
+- [ ] Comando CLI `iuna stats` (mesma info formatada no terminal)
+- [ ] Cache-Control: max-age=60
+- [ ] **Validar**: GET /stats → cobertura correta. `iuna stats` → saída no terminal.
+
+### T-23: Segundo LLM provider
+- [ ] Implementar o outro provider (Ollama se começou com Gemini, ou vice-versa)
+- [ ] Testar troca via `ACTIVE_LLM_PROVIDER`
+- [ ] **Validar**: mudar env → enriquecer um doc → funciona com o outro provider
+
+### T-24: ClaudeProvider (se necessário)
+- [ ] Implementar ClaudeProvider
+- [ ] **Validar**: mesmos testes
+
+---
+
+## Bloco 7 — Frontend de teste (web simples)
+
+> **Ao final deste bloco**: interface web para testar busca e chat sem curl/Swagger.
+
+### T-25: Página de busca
+- [ ] Criar `frontend/` (HTML + JS simples, ou Vue/React mínimo)
+- [ ] Input de busca → chama `/documentos/search` ou `/artefatos/search`
+- [ ] Exibe resultados com highlights
+- [ ] Filtros laterais (tipo_doc, ano, etc.)
+- [ ] Widget de chat integrado na página (botão que abre sidebar)
+- [ ] **Validar**: buscar termo → ver resultados com highlights na web
+
+### T-26: Página de chat (estilo ChatGPT)
+- [ ] Área de mensagens (user/assistant)
+- [ ] Input de texto + enviar
+- [ ] Lista de sessões na sidebar
+- [ ] Botão "adicionar documento ao contexto" (abre busca inline)
+- [ ] **Validar**: conversar sobre um documento enriquecido via interface web
+
+### T-27: Servir frontend via FastAPI (ou separado)
+- [ ] Servir arquivos estáticos via FastAPI (mount /static) OU docker-compose com nginx
+- [ ] **Validar**: `docker compose up` → frontend acessível em localhost:3000 (ou :8000/static)
+
+---
+
+## Bloco 8 — Testes obrigatórios (1ª rodada)
+
+### T-28: Testes unitários core
+- [ ] test_pdf_extractor.py (PDF válido, corrompido, sem texto)
+- [ ] test_query_helpers.py (funções retornam dicts corretos)
+- [ ] test_scoring.py (pesos corretos, increment funciona)
+- [ ] test_enrichment_service.py (com LLM mock):
+  - resumo: busca content, gera, grava + timestamp
+  - vetor: usa resumo como input
+  - chunking: threshold 10k, split correto
+
+### T-29: Testes integração endpoints
+- [ ] Auth: sem token → 401, com token → passa
+- [ ] CRUD: POST upload, GET, PATCH, DELETE (ambos tipos)
+- [ ] Enrichment: POST com doc_id → grava no ES
+- [ ] Search: busca retorna resultados com highlights
+
+### T-30: Testes do ChatService
+- [ ] ask_about_document + doc com chunks → busca híbrida
+- [ ] ask_about_document + doc sem chunks → texto completo
+- [ ] chitchat → direto ao LLM
+- [ ] Sessão persistida e recuperável
+
+---
+
+## Bloco 9 — Testes de cobertura (2ª rodada)
+
+### T-31: Edge cases e resiliência
+- [ ] ES offline → 503
+- [ ] Rasa offline → fallback
+- [ ] LLM falha → exceção
+- [ ] PDF corrompido → erro controlado
+- [ ] chunk_size < 3000 → 422
+- [ ] Doc < 10k → chunking retorna 0
+- [ ] Re-upload → chunks antigos deletados
+- [ ] setup-indices com dados existentes → não sobrescreve (a menos que --recreate)
+
+### T-32: Busca avançada
+- [ ] Facetas retornam agregações corretas
+- [ ] Similar com embedding → kNN
+- [ ] Similar sem embedding → more_like_this
+- [ ] by-entity e by-keyword retornam matches corretos
+- [ ] Suggest retorna sugestões
+- [ ] popularity_score influencia ranking
+
+### T-33: CLI completo
+- [ ] `iuna ingest --directory` → indexa N PDFs com progresso
+- [ ] `iuna ingest --enrich` → indexa + enriquece
+- [ ] `iuna enrich --skip-existing` → pula docs já processados
+- [ ] `iuna stats` → output correto
+- [ ] `iuna delete` → remove doc + chunks
+
+---
+
+## Bloco 10 — Docker + deploy final
+
+### T-34: docker-compose + Dockerfile
+- [ ] Dockerfile multi-stage (build + prod)
+- [ ] docker-compose: web + rasa
+- [ ] Volume para modelos Rasa treinados
+- [ ] **Validar**: `docker compose up` → API + Rasa + frontend rodando
+
+### T-35: Rasa treinamento
+- [ ] Criar `rasa/data/nlu.yml` com exemplos de intenções
+- [ ] `rasa/config.yml`, `domain.yml`
+- [ ] Treinar modelo
+- [ ] **Validar**: chat classifica intenções corretamente
+
+---
+
+## Dependências entre Blocos
+
+```
+Bloco 1 (esqueleto) → Bloco 2 (ingestão) → Bloco 3 (enriquecimento) → Bloco 4 (busca)
+                                                                         ↓
+                                                                    Bloco 5 (chat)
+                                                                         ↓
+                                                                    Bloco 6 (stats + providers)
+                                                                         ↓
+                                                                    Bloco 7 (frontend)
+                                                                         ↓
+                                                              Bloco 8 (testes obrigatórios)
+                                                                         ↓
+                                                              Bloco 9 (testes cobertura)
+                                                                         ↓
+                                                              Bloco 10 (docker + deploy)
+```
+
+---
+
+## Notas
+
+- **Bloco 2 é o ponto de virada**: ao final dele, você já pode submeter PDFs e ver no ES. A API já está "útil".
+- **Bloco 3 torna a busca rica**: sem enriquecimento, a busca é só BM25 básico. Com ele, ganha semelhantes, entidades, keywords.
+- **Frontend (Bloco 7)**: pode ser movido para antes do Bloco 8 se preferir testar visualmente antes de escrever testes automatizados. Depois migra para projeto separado.
+- **setup-indices**: NUNCA recria índices com dados a menos que `--recreate` seja passado explicitamente.
+- **Samples**: a pasta `samples/` com PDFs de exemplo é essencial para validação rápida em cada bloco.

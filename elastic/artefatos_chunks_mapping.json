@@ -1,0 +1,39 @@
+{
+    "artefatos_chunks": {
+        "mappings": {
+            "_meta": {
+                "description": "Chunks de artefatos — alvo principal de segmentação para RAG. Cada chunk referencia seu artefato pai.",
+                "version": "1.0.0"
+            },
+            "properties": {
+                "parent_document_id": {
+                    "type": "keyword"
+                },
+                "parent_filename": {
+                    "type": "keyword"
+                },
+                "chunk_index": {
+                    "type": "integer"
+                },
+                "content": {
+                    "type": "text"
+                },
+                "total_chunks": {
+                    "type": "integer"
+                },
+                "chunk_size": {
+                    "type": "integer"
+                },
+                "embedding_vector": {
+                    "type": "dense_vector",
+                    "dims": 768,
+                    "index": true,
+                    "similarity": "cosine"
+                },
+                "created_at": {
+                    "type": "date"
+                }
+            }
+        }
+    }
+}

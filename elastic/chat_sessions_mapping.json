@@ -1,0 +1,34 @@
+{
+    "chat_sessions": {
+        "mappings": {
+            "properties": {
+                "session_id": {
+                    "type": "keyword"
+                },
+                "client_id": {
+                    "type": "keyword"
+                },
+                "messages": {
+                    "type": "nested",
+                    "properties": {
+                        "role": {
+                            "type": "keyword"
+                        },
+                        "content": {
+                            "type": "text"
+                        },
+                        "timestamp": {
+                            "type": "date"
+                        }
+                    }
+                },
+                "created_at": {
+                    "type": "date"
+                },
+                "last_activity_at": {
+                    "type": "date"
+                }
+            }
+        }
+    }
+}

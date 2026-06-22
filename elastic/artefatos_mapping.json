@@ -1,0 +1,121 @@
+{
+    "artefatos": {
+        "mappings": {
+            "_meta": {
+                "description": "Documentos genéricos (livros, materiais, PDFs diversos). Alvo principal de chunking para RAG.",
+                "version": "2.0.0"
+            },
+            "properties": {
+                "artefato": {
+                    "properties": {
+                        "artefato_id": {
+                            "type": "keyword"
+                        },
+                        "titulo": {
+                            "type": "text",
+                            "fields": {
+                                "keyword": {
+                                    "type": "keyword",
+                                    "ignore_above": 256
+                                }
+                            }
+                        },
+                        "tipo": {
+                            "type": "keyword"
+                        },
+                        "tags": {
+                            "type": "text",
+                            "fields": {
+                                "keyword": {
+                                    "type": "keyword",
+                                    "ignore_above": 256
+                                }
+                            }
+                        },
+                        "uploaded_by": {
+                            "type": "keyword"
+                        },
+                        "created_at": {
+                            "type": "date"
+                        },
+                        "updated_at": {
+                            "type": "date"
+                        },
+                        "resumo": {
+                            "type": "text"
+                        },
+                        "resumo_at": {
+                            "type": "date"
+                        },
+                        "embedding_vector": {
+                            "type": "dense_vector",
+                            "dims": 768,
+                            "index": true,
+                            "similarity": "cosine"
+                        },
+                        "embedding_vector_at": {
+                            "type": "date"
+                        },
+                        "entidades": {
+                            "type": "nested",
+                            "properties": {
+                                "texto": {
+                                    "type": "text",
+                                    "fields": {
+                                        "keyword": {
+                                            "type": "keyword",
+                                            "ignore_above": 256
+                                        }
+                                    }
+                                },
+                                "categoria": {
+                                    "type": "keyword"
+                                },
+                                "confianca": {
+                                    "type": "float"
+                                }
+                            }
+                        },
+                        "entidades_at": {
+                            "type": "date"
+                        },
+                        "chunking_at": {
+                            "type": "date"
+                        },
+                        "total_chunks": {
+                            "type": "integer"
+                        }
+                    }
+                },
+                "attachment": {
+                    "properties": {
+                        "content": {
+                            "type": "text"
+                        },
+                        "title": {
+                            "type": "text",
+                            "fields": {
+                                "keyword": {
+                                    "type": "keyword",
+                                    "ignore_above": 256
+                                }
+                            }
+                        },
+                        "content_length": {
+                            "type": "long"
+                        }
+                    }
+                },
+                "filename": {
+                    "type": "text",
+                    "fields": {
+                        "keyword": {
+                            "type": "keyword",
+                            "ignore_above": 256
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
