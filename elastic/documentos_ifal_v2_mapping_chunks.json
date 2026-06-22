@@ -1,5 +1,5 @@
 {
-    "documentos_ifal_chunks": {
+    "documentos_ifal_v2_chunks": {
         "mappings": {
             "properties": {
                 "parent_document_id": {

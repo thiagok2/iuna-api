@@ -84,6 +84,21 @@
                         },
                         "total_chunks": {
                             "type": "integer"
+                        },
+                        "keywords": {
+                            "type": "text",
+                            "fields": {
+                                "keyword": {
+                                    "type": "keyword",
+                                    "ignore_above": 256
+                                }
+                            }
+                        },
+                        "keywords_at": {
+                            "type": "date"
+                        },
+                        "popularity_score": {
+                            "type": "integer"
                         }
                     }
                 },
