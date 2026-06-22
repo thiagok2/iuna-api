@@ -10,27 +10,27 @@
 > **Ao final deste bloco**: API respondendo, CLI executando, ES conectado, índices criados, PDFs de exemplo prontos para submissão.
 
 ### T-01: Config + Dependências + .env
-- [ ] Atualizar `app/config.py` (todas as variáveis: API_SECRET_TOKEN, ES_*, LLM_*, RASA_*, CHAT_*, BATCH_*)
-- [ ] Properties para nomes de índice (`index_documentos`, `index_artefatos`, etc.)
-- [ ] Criar `.env.example` completo
-- [ ] Atualizar `requirements.txt` / `pyproject.toml`: fastapi, uvicorn, pydantic-settings, elasticsearch[async], httpx, pdfplumber, PyPDF2, typer, python-multipart
-- [ ] **Validar**: app inicia sem erro com `uvicorn app.main:app`
+- [x] Atualizar `app/config.py` (todas as variáveis: API_SECRET_TOKEN, ES_*, LLM_*, RASA_*, CHAT_*, BATCH_*)
+- [x] Properties para nomes de índice (`index_documentos`, `index_artefatos`, etc.)
+- [x] Criar `.env.example` completo
+- [x] Atualizar `requirements.txt` / `pyproject.toml`: fastapi, uvicorn, pydantic-settings, elasticsearch[async], httpx, pdfplumber, PyPDF2, typer, python-multipart
+- [x] **Validar**: app inicia sem erro com `uvicorn app.main:app`
 
 ### T-02: ESClient + Health
-- [ ] Criar `app/clients/es_client.py` (AsyncElasticsearch singleton)
-- [ ] Métodos: connect, close, ping, search, get, index, update, delete, delete_by_query, bulk_index, create_index, delete_index
-- [ ] Startup/shutdown no `app/main.py`
-- [ ] Criar `app/api/routers/health.py`:
+- [x] Criar `app/clients/es_client.py` (AsyncElasticsearch singleton)
+- [x] Métodos: connect, close, ping, search, get, index, update, delete, delete_by_query, bulk_index, create_index, delete_index
+- [x] Startup/shutdown no `app/main.py`
+- [x] Criar `app/api/routers/health.py`:
   - `GET /health-check` → 200 (sem auth)
   - `GET /info` → nome/versão (sem auth)
   - `GET /api/v1/health` → verifica ES (acessível/inacessível)
-- [ ] **Validar**: `curl localhost:8000/api/v1/health` → mostra status do ES
+- [x] **Validar**: `curl localhost:8000/api/v1/health` → mostra status do ES
 
 ### T-03: Auth middleware + X-Request-Id
-- [ ] Dependency `verify_token` (compara Bearer com API_SECRET_TOKEN)
-- [ ] Middleware `RequestIdMiddleware`
-- [ ] Exception handlers globais (NotFound, Conflict, Unauthorized, ServiceUnavailable)
-- [ ] **Validar**: curl sem token → 401. Com token → passa. Response tem X-Request-Id.
+- [x] Dependency `verify_token` (compara Bearer com API_SECRET_TOKEN)
+- [x] Middleware `RequestIdMiddleware`
+- [x] Exception handlers globais (NotFound, Conflict, Unauthorized, ServiceUnavailable)
+- [x] **Validar**: curl sem token → 401. Com token → passa. Response tem X-Request-Id.
 
 ### T-04: CLI setup-indices
 - [ ] Criar `app/cli/main.py` (Typer)
