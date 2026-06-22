@@ -2,6 +2,7 @@
 CRUD routes for artefatos (teaching artifacts, plans, etc.).
 """
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile
@@ -9,6 +10,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, 
 from app.api.dependencies import verify_token
 from app.api.models.requests import ArtefatoMetadataUpdate
 from app.api.models.responses import APIResponse, ErrorResponse, PaginatedResponse
+from app.clients.es_client import es_client
+from app.core.exceptions import ConflictError, NotFoundError, ServiceUnavailableError, ValidationError
+from app.services.artefatos_crud import ArtefatosCrudService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/artefatos",
@@ -17,13 +23,21 @@ router = APIRouter(
 )
 
 
+def _get_service() -> ArtefatosCrudService:
+    return ArtefatosCrudService(es_client)
+
+
 @router.post(
     "/upload",
     summary="Upload de artefato (PDF)",
     description="Faz upload de um artefato didático (plano de ensino, apostila, livro) em formato PDF. "
     "O texto é extraído automaticamente.",
     response_model=APIResponse,
-    responses={400: {"model": ErrorResponse, "description": "Arquivo inválido ou não-PDF"}},
+    responses={
+        400: {"model": ErrorResponse, "description": "Arquivo inválido ou não-PDF"},
+        409: {"model": ErrorResponse, "description": "Artefato já existe"},
+        503: {"model": ErrorResponse, "description": "Elasticsearch indisponível"},
+    },
 )
 async def upload_artefato(
     file: UploadFile = File(..., description="Arquivo PDF do artefato"),
@@ -35,8 +49,35 @@ async def upload_artefato(
     ano: Optional[int] = Form(None, description="Ano de publicação", examples=[2024]),
     publico: bool = Form(True, description="Se o artefato é público"),
     tags: Optional[str] = Form(None, description="Tags separadas por vírgula", examples=["programação,python,algoritmos"]),
+    uploaded_by: Optional[str] = Form(None, description="Quem fez upload", examples=["admin"]),
+    force: bool = Form(False, description="Sobrescrever artefato existente com mesmo filename"),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    # Validate file
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Apenas arquivos PDF são aceitos")
+
+    file_content = await file.read()
+    if not file_content:
+        raise HTTPException(status_code=400, detail="Arquivo vazio")
+
+    # Parse tags from comma-separated string
+    parsed_tags = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+
+    metadata = {
+        "titulo": titulo,
+        "tipo": tipo,
+        "disciplina": disciplina,
+        "curso": curso,
+        "autor": autor,
+        "ano": ano,
+        "publico": publico,
+        "tags": parsed_tags,
+        "uploaded_by": uploaded_by or "system",
+    }
+
+    service = _get_service()
+    result = await service.upload(file_content, file.filename, metadata, force=force)
+    return APIResponse(data=result)
 
 
 @router.get(
@@ -44,12 +85,17 @@ async def upload_artefato(
     summary="Buscar artefato por ID",
     description="Retorna os metadados completos e texto de um artefato pelo seu ID.",
     response_model=APIResponse,
-    responses={404: {"model": ErrorResponse, "description": "Artefato não encontrado"}},
+    responses={
+        404: {"model": ErrorResponse, "description": "Artefato não encontrado"},
+        503: {"model": ErrorResponse, "description": "Elasticsearch indisponível"},
+    },
 )
 async def get_artefato(
     artefato_id: str = Path(..., description="ID do artefato no Elasticsearch", examples=["art-456"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    service = _get_service()
+    doc = await service.get_by_id(artefato_id)
+    return APIResponse(data=doc)
 
 
 @router.get(
@@ -57,12 +103,17 @@ async def get_artefato(
     summary="Buscar artefato por nome do arquivo",
     description="Retorna um artefato pelo nome original do arquivo PDF.",
     response_model=APIResponse,
-    responses={404: {"model": ErrorResponse, "description": "Artefato não encontrado"}},
+    responses={
+        404: {"model": ErrorResponse, "description": "Artefato não encontrado"},
+        503: {"model": ErrorResponse, "description": "Elasticsearch indisponível"},
+    },
 )
 async def get_artefato_by_filename(
     filename: str = Path(..., description="Nome do arquivo PDF", examples=["plano_ensino_prog1.pdf"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    service = _get_service()
+    doc = await service.get_by_filename(filename)
+    return APIResponse(data=doc)
 
 
 @router.get(
@@ -70,6 +121,7 @@ async def get_artefato_by_filename(
     summary="Listar artefatos",
     description="Lista artefatos didáticos com paginação e filtros opcionais.",
     response_model=PaginatedResponse,
+    responses={503: {"model": ErrorResponse, "description": "Elasticsearch indisponível"}},
 )
 async def list_artefatos(
     page: int = Query(1, ge=1, description="Número da página", examples=[1]),
@@ -81,7 +133,32 @@ async def list_artefatos(
     ano: Optional[int] = Query(None, description="Filtrar por ano", examples=[2024]),
     publico: Optional[bool] = Query(None, description="Filtrar por visibilidade"),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    filters = {}
+    if tipo:
+        filters["tipo"] = tipo
+    if disciplina:
+        filters["disciplina"] = disciplina
+    if curso:
+        filters["curso"] = curso
+    if autor:
+        filters["uploaded_by"] = autor
+    if ano:
+        filters["ano"] = ano
+    if publico is not None:
+        filters["publico"] = publico
+
+    service = _get_service()
+    result = await service.list_all(page=page, page_size=page_size, filters=filters if filters else None)
+
+    hits = result.get("hits", {})
+    total = hits.get("total", {}).get("value", 0)
+    items = [hit.get("_source", {}) | {"_id": hit["_id"]} for hit in hits.get("hits", [])]
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+
+    return PaginatedResponse(
+        data=items,
+        meta={"page": page, "page_size": page_size, "total": total, "total_pages": total_pages},
+    )
 
 
 @router.patch(
@@ -89,13 +166,19 @@ async def list_artefatos(
     summary="Atualizar metadados do artefato",
     description="Atualiza parcialmente os metadados de um artefato. Campos não enviados permanecem inalterados.",
     response_model=APIResponse,
-    responses={404: {"model": ErrorResponse, "description": "Artefato não encontrado"}},
+    responses={
+        404: {"model": ErrorResponse, "description": "Artefato não encontrado"},
+        503: {"model": ErrorResponse, "description": "Elasticsearch indisponível"},
+    },
 )
 async def update_artefato(
     artefato_id: str = Path(..., description="ID do artefato", examples=["art-456"]),
     body: ArtefatoMetadataUpdate = ...,
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    fields = body.model_dump(exclude_unset=True)
+    service = _get_service()
+    result = await service.update_metadata(artefato_id, fields)
+    return APIResponse(data=result)
 
 
 @router.delete(
@@ -103,9 +186,14 @@ async def update_artefato(
     summary="Excluir artefato",
     description="Remove um artefato e todos os seus chunks associados do Elasticsearch.",
     response_model=APIResponse,
-    responses={404: {"model": ErrorResponse, "description": "Artefato não encontrado"}},
+    responses={
+        404: {"model": ErrorResponse, "description": "Artefato não encontrado"},
+        503: {"model": ErrorResponse, "description": "Elasticsearch indisponível"},
+    },
 )
 async def delete_artefato(
     artefato_id: str = Path(..., description="ID do artefato a excluir", examples=["art-456"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    service = _get_service()
+    result = await service.delete(artefato_id)
+    return APIResponse(data=result)

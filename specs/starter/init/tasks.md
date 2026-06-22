@@ -76,11 +76,11 @@
 > **Ao final deste bloco**: PDFs podem ser submetidos e aparecem no ES. Busca por ID/filename funciona.
 
 ### T-07: DocumentosCrudService + Router
-- [ ] Criar `app/services/documentos_crud.py`:
+- [x] Criar `app/services/documentos_crud.py`:
   - `upload(file_bytes, filename, metadados_opcionais)` → extrai texto, indexa
   - `get_by_id`, `get_by_filename`, `delete` (+ chunks)
   - `list_all(page, page_size)`, `update_metadata(id, fields)`
-- [ ] Substituir stubs em `crud_documentos.py`:
+- [x] Substituir stubs em `crud_documentos.py`:
   - `POST /documentos/upload` (multipart)
   - `GET /documentos/{id}`, `GET /documentos/by-filename/{filename}`
   - `GET /documentos` (listagem paginada)
@@ -88,19 +88,19 @@
 - [ ] **Validar**: Upload PDF via Swagger → doc aparece no ES. GET retorna.
 
 ### T-08: ArtefatosCrudService + Router
-- [ ] Criar `app/services/artefatos_crud.py`:
+- [x] Criar `app/services/artefatos_crud.py`:
   - `upload(file_bytes, filename, titulo, uploaded_by, tipo, tags)` → extrai texto, indexa
   - `get_by_id`, `get_by_filename`, `delete`, `list_all`, `update_metadata`
   - Re-upload: deleta chunks antigos antes de reindexar
-- [ ] Substituir stubs em `crud_artefatos.py`
+- [x] Substituir stubs em `crud_artefatos.py`
 - [ ] **Validar**: Upload PDF artefato via Swagger → aparece no ES
 
 ### T-09: CLI ingest
-- [ ] Comando `iuna ingest --source-type <tipo> --directory <path> [--force] [--concurrency N]`
-- [ ] Por default: só indexa (ES only, sem LLM)
-- [ ] Flag `--enrich` (por agora stub: print "enrich not implemented yet")
-- [ ] `--force` para sobrescrever existentes. Sem `--force` → pula se filename já existe.
-- [ ] Progresso no terminal.
+- [x] Comando `iuna ingest --source-type <tipo> --directory <path> [--force] [--concurrency N]`
+- [x] Por default: só indexa (ES only, sem LLM)
+- [x] Flag `--enrich` (por agora stub: print "enrich not implemented yet")
+- [x] `--force` para sobrescrever existentes. Sem `--force` → pula se filename já existe.
+- [x] Progresso no terminal.
 - [ ] **Validar**: `iuna ingest --source-type artefatos --directory ./samples/` → PDFs indexados. Conferir no ES.
 
 ---

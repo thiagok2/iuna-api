@@ -4,7 +4,9 @@ CLI para gerenciamento do IUNA API.
 Uso: python -m app.cli.main <command>
 """
 
+import asyncio
 import json
+import logging
 from pathlib import Path
 
 import typer
@@ -16,6 +18,8 @@ app = typer.Typer(
     name="iuna",
     help="CLI de gerenciamento do IUNA API — índices, ingestão e utilitários.",
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Mapping: arquivo JSON → nome base do índice
@@ -157,17 +161,110 @@ def setup_indices(
 
 
 # ---------------------------------------------------------------------------
+# Comando: ingest
+# ---------------------------------------------------------------------------
+@app.command()
+def ingest(
+    source_type: str = typer.Option(..., "--source-type", help="documentos_ifal_v2 | artefatos"),
+    directory: str = typer.Option(..., "--directory", help="Diretório com PDFs"),
+    force: bool = typer.Option(False, "--force", help="Sobrescrever existentes"),
+    enrich: bool = typer.Option(False, "--enrich", help="Enriquecer após indexar (não implementado)"),
+    concurrency: int = typer.Option(3, "--concurrency", help="Concorrência máxima"),
+) -> None:
+    """Indexa PDFs de um diretório no Elasticsearch."""
+    asyncio.run(_run_ingest(source_type, directory, force, enrich, concurrency))
+
+
+async def _run_ingest(
+    source_type: str, directory: str, force: bool, enrich: bool, concurrency: int
+) -> None:
+    """Core async logic for the ingest command."""
+    from app.clients.es_client import es_client
+    from app.services.artefatos_crud import ArtefatosCrudService
+    from app.services.documentos_crud import DocumentosCrudService
+
+    # Validate source type
+    valid_types = ("documentos_ifal_v2", "artefatos")
+    if source_type not in valid_types:
+        typer.echo(f"❌ source-type inválido: {source_type}. Use: {', '.join(valid_types)}")
+        raise typer.Exit(code=1)
+
+    # Validate directory
+    dir_path = Path(directory)
+    if not dir_path.is_dir():
+        typer.echo(f"❌ Diretório não encontrado: {directory}")
+        raise typer.Exit(code=1)
+
+    # Find all PDF files
+    pdf_files = sorted(dir_path.glob("*.pdf"))
+    if not pdf_files:
+        typer.echo(f"⚠️  Nenhum arquivo PDF encontrado em: {directory}")
+        raise typer.Exit(code=0)
+
+    typer.echo(f"📂 Encontrados {len(pdf_files)} arquivos PDF em: {directory}")
+    typer.echo(f"📌 Tipo: {source_type} | Force: {force} | Concurrency: {concurrency}")
+    typer.echo("")
+
+    # Connect to ES
+    try:
+        await es_client.connect()
+    except Exception as exc:
+        typer.echo(f"❌ Erro ao conectar ao Elasticsearch: {exc}")
+        raise typer.Exit(code=1)
+
+    # Pick the right service
+    if source_type == "documentos_ifal_v2":
+        service = DocumentosCrudService(es_client)
+    else:
+        service = ArtefatosCrudService(es_client)
+
+    # Process files with concurrency control
+    semaphore = asyncio.Semaphore(concurrency)
+    success_count = 0
+    error_count = 0
+    total = len(pdf_files)
+
+    async def _process_file(idx: int, pdf_path: Path) -> bool:
+        nonlocal success_count, error_count
+        async with semaphore:
+            filename = pdf_path.name
+            try:
+                file_content = pdf_path.read_bytes()
+                metadata = {"titulo": pdf_path.stem.replace("_", " ").title()}
+
+                if source_type == "artefatos":
+                    metadata["uploaded_by"] = "cli-ingest"
+
+                await service.upload(file_content, filename, metadata, force=force)
+                success_count += 1
+                typer.echo(f"  ✅ [{idx}/{total}] {filename}")
+                return True
+            except Exception as exc:
+                error_count += 1
+                typer.echo(f"  ❌ [{idx}/{total}] {filename} — {exc}")
+                return False
+
+    # Create tasks
+    tasks = [_process_file(i + 1, pdf) for i, pdf in enumerate(pdf_files)]
+    await asyncio.gather(*tasks)
+
+    # Cleanup
+    await es_client.close()
+
+    # Summary
+    typer.echo("")
+    typer.echo(f"🏁 Ingestão finalizada: {success_count} sucesso, {error_count} erro(s)")
+
+    if enrich:
+        typer.echo("⚠️  --enrich: funcionalidade de enriquecimento ainda não implementada.")
+
+
+# ---------------------------------------------------------------------------
 # Stub commands
 # ---------------------------------------------------------------------------
 @app.command()
 def enrich() -> None:
     """Enriquece documentos com IA (resumo, entidades, keywords)."""
-    typer.echo("Not implemented yet")
-
-
-@app.command()
-def ingest() -> None:
-    """Ingere documentos no Elasticsearch."""
     typer.echo("Not implemented yet")
 
 

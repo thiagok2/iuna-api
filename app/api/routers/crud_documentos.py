@@ -2,6 +2,7 @@
 CRUD routes for documentos (institutional documents).
 """
 
+import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, UploadFile
@@ -9,6 +10,11 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Path, Query, 
 from app.api.dependencies import verify_token
 from app.api.models.requests import MetadataUpdate
 from app.api.models.responses import APIResponse, ErrorResponse, PaginatedResponse
+from app.clients.es_client import es_client
+from app.core.exceptions import ConflictError, NotFoundError, ServiceUnavailableError, ValidationError
+from app.services.documentos_crud import DocumentosCrudService
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/documentos",
@@ -17,13 +23,21 @@ router = APIRouter(
 )
 
 
+def _get_service() -> DocumentosCrudService:
+    return DocumentosCrudService(es_client)
+
+
 @router.post(
     "/upload",
     summary="Upload de documento (PDF)",
     description="Faz upload de um arquivo PDF e indexa no Elasticsearch com metadados opcionais. "
     "O texto é extraído automaticamente do PDF.",
     response_model=APIResponse,
-    responses={400: {"model": ErrorResponse, "description": "Arquivo inválido ou não-PDF"}},
+    responses={
+        400: {"model": ErrorResponse, "description": "Arquivo inválido ou não-PDF"},
+        409: {"model": ErrorResponse, "description": "Documento já existe"},
+        503: {"model": ErrorResponse, "description": "Elasticsearch indisponível"},
+    },
 )
 async def upload_documento(
     file: UploadFile = File(..., description="Arquivo PDF para upload"),
@@ -37,8 +51,35 @@ async def upload_documento(
     esfera: Optional[str] = Form(None, description="Esfera administrativa (federal, estadual, municipal)", examples=["federal"]),
     fonte: Optional[str] = Form(None, description="Fonte/origem do documento", examples=["diario_oficial"]),
     categoria: Optional[str] = Form(None, description="Categoria: institucional | didatico | projeto", examples=["institucional"]),
+    force: bool = Form(False, description="Sobrescrever documento existente com mesmo filename"),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    # Validate file
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Apenas arquivos PDF são aceitos")
+
+    file_content = await file.read()
+    if not file_content:
+        raise HTTPException(status_code=400, detail="Arquivo vazio")
+
+    # Parse tags from comma-separated string
+    parsed_tags = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+
+    metadata = {
+        "titulo": titulo,
+        "ementa": ementa,
+        "tipo_doc": tipo_doc,
+        "ano": ano,
+        "publico": publico,
+        "tags": parsed_tags,
+        "orgao": orgao,
+        "esfera": esfera,
+        "fonte": fonte,
+        "categoria": categoria,
+    }
+
+    service = _get_service()
+    result = await service.upload(file_content, file.filename, metadata, force=force)
+    return APIResponse(data=result)
 
 
 @router.get(
@@ -46,12 +87,17 @@ async def upload_documento(
     summary="Buscar documento por ID",
     description="Retorna os metadados completos e texto de um documento pelo seu ID no Elasticsearch.",
     response_model=APIResponse,
-    responses={404: {"model": ErrorResponse, "description": "Documento não encontrado"}},
+    responses={
+        404: {"model": ErrorResponse, "description": "Documento não encontrado"},
+        503: {"model": ErrorResponse, "description": "Elasticsearch indisponível"},
+    },
 )
 async def get_documento(
     document_id: str = Path(..., description="ID do documento no Elasticsearch", examples=["abc123"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    service = _get_service()
+    doc = await service.get_by_id(document_id)
+    return APIResponse(data=doc)
 
 
 @router.get(
@@ -59,12 +105,17 @@ async def get_documento(
     summary="Buscar documento por nome do arquivo",
     description="Retorna um documento pelo nome original do arquivo PDF.",
     response_model=APIResponse,
-    responses={404: {"model": ErrorResponse, "description": "Documento não encontrado"}},
+    responses={
+        404: {"model": ErrorResponse, "description": "Documento não encontrado"},
+        503: {"model": ErrorResponse, "description": "Elasticsearch indisponível"},
+    },
 )
 async def get_documento_by_filename(
     filename: str = Path(..., description="Nome do arquivo PDF", examples=["edital_01_2024.pdf"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    service = _get_service()
+    doc = await service.get_by_filename(filename)
+    return APIResponse(data=doc)
 
 
 @router.get(
@@ -72,6 +123,7 @@ async def get_documento_by_filename(
     summary="Listar documentos",
     description="Lista documentos com paginação. Retorna metadados sem o texto completo.",
     response_model=PaginatedResponse,
+    responses={503: {"model": ErrorResponse, "description": "Elasticsearch indisponível"}},
 )
 async def list_documentos(
     page: int = Query(1, ge=1, description="Número da página", examples=[1]),
@@ -83,7 +135,30 @@ async def list_documentos(
     publico: Optional[bool] = Query(None, description="Filtrar por visibilidade pública/privada"),
     categoria: Optional[str] = Query(None, description="Filtrar por categoria", examples=["institucional"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    filters = {}
+    if tipo_doc:
+        filters["tipo_doc"] = tipo_doc
+    if orgao:
+        filters["fonte.orgao"] = orgao
+    if esfera:
+        filters["fonte.esfera"] = esfera
+    if ano:
+        filters["ano"] = ano
+    if publico is not None:
+        filters["publico"] = publico
+
+    service = _get_service()
+    result = await service.list_all(page=page, page_size=page_size, filters=filters if filters else None)
+
+    hits = result.get("hits", {})
+    total = hits.get("total", {}).get("value", 0)
+    items = [hit.get("_source", {}) | {"_id": hit["_id"]} for hit in hits.get("hits", [])]
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+
+    return PaginatedResponse(
+        data=items,
+        meta={"page": page, "page_size": page_size, "total": total, "total_pages": total_pages},
+    )
 
 
 @router.patch(
@@ -91,13 +166,19 @@ async def list_documentos(
     summary="Atualizar metadados do documento",
     description="Atualiza parcialmente os metadados de um documento. Campos não enviados permanecem inalterados.",
     response_model=APIResponse,
-    responses={404: {"model": ErrorResponse, "description": "Documento não encontrado"}},
+    responses={
+        404: {"model": ErrorResponse, "description": "Documento não encontrado"},
+        503: {"model": ErrorResponse, "description": "Elasticsearch indisponível"},
+    },
 )
 async def update_documento(
     document_id: str = Path(..., description="ID do documento", examples=["abc123"]),
     body: MetadataUpdate = ...,
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    fields = body.model_dump(exclude_unset=True)
+    service = _get_service()
+    result = await service.update_metadata(document_id, fields)
+    return APIResponse(data=result)
 
 
 @router.delete(
@@ -105,9 +186,14 @@ async def update_documento(
     summary="Excluir documento",
     description="Remove um documento e todos os seus chunks associados do Elasticsearch.",
     response_model=APIResponse,
-    responses={404: {"model": ErrorResponse, "description": "Documento não encontrado"}},
+    responses={
+        404: {"model": ErrorResponse, "description": "Documento não encontrado"},
+        503: {"model": ErrorResponse, "description": "Elasticsearch indisponível"},
+    },
 )
 async def delete_documento(
     document_id: str = Path(..., description="ID do documento a excluir", examples=["abc123"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    service = _get_service()
+    result = await service.delete(document_id)
+    return APIResponse(data=result)
