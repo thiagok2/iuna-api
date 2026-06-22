@@ -43,19 +43,31 @@
 - [x] **Validar**: `python -m app.cli.main setup-indices` → índices criados no ES (verificar via Kibana/curl)
 
 ### T-05: PDF Extractor + samples/
-- [ ] Criar `app/core/pdf_extractor.py` (pdfplumber + fallback PyPDF2)
-- [ ] Criar pasta `samples/` com 3-5 PDFs de exemplo (docs institucionais + artefatos genéricos)
-- [ ] Script de teste: `python -c "from app.core.pdf_extractor import ...; print(extract(open('samples/exemplo.pdf','rb').read())[:200])"`
-- [ ] **Validar**: texto extraído de PDF de exemplo
+- [x] Criar `app/core/pdf_extractor.py` (fallback local: pdfplumber + PyPDF2)
+- [x] Estratégia primária: ES Ingest Attachment Pipeline (Apache Tika)
+- [x] Criar pasta `samples/` com PDFs de exemplo
+- [x] **Validar fallback local**:
+  ```
+  source .venv/bin/activate
+  python samples/test_extractor.py
+  ```
+- [ ] **Validar pipeline ES** (quando ES estiver online):
+  1. Criar pipeline: executar curls de `elastic/setup/20260622_ingest_pipeline.md`
+  2. Testar indexação com extração:
+  ```
+  source .venv/bin/activate
+  python samples/test_ingest_pipeline.py samples/edital_selecao.pdf
+  ```
+  Deve mostrar: texto extraído pelo Tika em `attachment.content`, campo `data` removido.
 
 ### T-06: Stubs de TODAS as rotas (retornam 501)
-- [ ] Criar todos os routers com endpoints stub (HTTP 501 "Not Implemented"):
+- [x] Criar todos os routers com endpoints stub (HTTP 501 "Not Implemented"):
   - `crud_documentos.py`, `crud_artefatos.py`
   - `search_documentos.py`, `search_artefatos.py`
   - `enrichment_documentos.py`, `enrichment_artefatos.py`
   - `chat.py`, `stats.py`
-- [ ] Registrar todos em `app/main.py`
-- [ ] **Validar**: Abrir `/docs` (Swagger) → TODAS as 54 rotas visíveis
+- [x] Registrar todos em `app/main.py`
+- [x] **Validar**: Abrir `/docs` (Swagger) → TODAS as 54 rotas visíveis
 
 ---
 
