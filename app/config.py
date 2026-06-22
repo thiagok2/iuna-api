@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     CHAT_SESSION_TTL_HOURS: int = 24
     CHAT_HISTORY_MAX_MESSAGES: int = 10
 
+    # Elasticsearch Ingest Pipeline
+    ES_INGEST_PIPELINE: str = "attachment_pipeline"
+
     # Batch processing
     BATCH_DEFAULT_CONCURRENCY: int = 3
 

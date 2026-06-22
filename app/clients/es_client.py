@@ -77,6 +77,29 @@ class ESClient:
         response = await self.client.index(**kwargs)
         return response.body
 
+    async def index_with_pipeline(
+        self, index: str, body: dict, pipeline: str, id: str | None = None
+    ) -> dict:
+        """Index a document using a specific ingest pipeline.
+
+        Used primarily for the attachment_pipeline which extracts text
+        from base64-encoded PDFs via Apache Tika (ES Ingest Attachment plugin).
+
+        Args:
+            index: Target index name.
+            body: Document body (must include the field expected by the pipeline).
+            pipeline: Name of the ingest pipeline (e.g. "attachment_pipeline").
+            id: Optional document ID.
+
+        Returns:
+            Elasticsearch index response body.
+        """
+        kwargs: dict = {"index": index, "document": body, "pipeline": pipeline}
+        if id:
+            kwargs["id"] = id
+        response = await self.client.index(**kwargs)
+        return response.body
+
     async def update(self, index: str, id: str, body: dict) -> dict:
         """Partially update a document."""
         response = await self.client.update(index=index, id=id, doc=body)
