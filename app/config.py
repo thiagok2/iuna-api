@@ -19,7 +19,10 @@ class Settings(BaseSettings):
     # LLM provider selection — valores aceitos: gemini | claude | ollama
     ACTIVE_LLM_PROVIDER: str = "gemini"
     GEMINI_API_KEY: Optional[str] = None
+    GEMINI_TEXT_MODEL: str = "gemini-2.0-flash"
+    GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
     CLAUDE_API_KEY: Optional[str] = None
+    CLAUDE_MODEL: str = "claude-haiku-4-5"
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3"
 
@@ -31,7 +34,7 @@ class Settings(BaseSettings):
     CHAT_HISTORY_MAX_MESSAGES: int = 10
 
     # Elasticsearch Ingest Pipeline
-    ES_INGEST_PIPELINE: str = "attachment_pipeline"
+    ES_INGEST_PIPELINE: str = "attachment"
 
     # Batch processing
     BATCH_DEFAULT_CONCURRENCY: int = 3
@@ -40,6 +43,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
     # --- Index names (computed properties) ---
+
+    @property
+    def index_documentos_ifal(self) -> str:
+        return f"documentos_ifal{self.ES_INDEX_SUFFIX}"
 
     @property
     def index_documentos_ifal_v2(self) -> str:
