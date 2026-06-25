@@ -4,9 +4,10 @@ Pipeline para extração de texto de PDFs usando Apache Tika (plugin ingest-atta
 
 ## Pré-requisito: verificar se o plugin está instalado
 
-```
-GET https://elastic.pnld-avaliacao-dev.nees.ufal.br/_nodes/plugins
-Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=
+```bash
+curl -H "Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=" \
+  "https://elastic.pnld-avaliacao-dev.nees.ufal.br/_nodes/plugins" \
+  | python3 -c "import sys,json; nodes=json.load(sys.stdin).get('nodes',{}); [print(n['name'], [p['name'] for p in n.get('plugins',[])]) for n in nodes.values()]"
 ```
 
 Na resposta, procure por `"ingest-attachment"` na lista de plugins de cada nó.
@@ -20,29 +21,29 @@ bin/elasticsearch-plugin install ingest-attachment
 
 ## Criar o pipeline
 
-```
-PUT https://elastic.pnld-avaliacao-dev.nees.ufal.br/_ingest/pipeline/attachment_pipeline
-Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=
-Content-Type: application/json
-
-{
-  "description": "Extract text from PDF base64 data using Apache Tika",
-  "processors": [
-    {
-      "attachment": {
-        "field": "data",
-        "target_field": "attachment",
-        "indexed_chars": -1
+```bash
+curl -X PUT \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=" \
+  "https://elastic.pnld-avaliacao-dev.nees.ufal.br/_ingest/pipeline/attachment" \
+  -d '{
+    "description": "Extrair texto de anexos PDF",
+    "processors": [
+      {
+        "attachment": {
+          "field": "data",
+          "target_field": "attachment",
+          "indexed_chars": -1
+        }
+      },
+      {
+        "remove": {
+          "field": "data",
+          "ignore_missing": true
+        }
       }
-    },
-    {
-      "remove": {
-        "field": "data",
-        "ignore_missing": true
-      }
-    }
-  ]
-}
+    ]
+  }'
 ```
 
 ### O que o pipeline faz:
@@ -56,30 +57,29 @@ Content-Type: application/json
 
 ## Verificar se o pipeline foi criado
 
-```
-GET https://elastic.pnld-avaliacao-dev.nees.ufal.br/_ingest/pipeline/attachment_pipeline
-Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=
+```bash
+curl -H "Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=" \
+  "https://elastic.pnld-avaliacao-dev.nees.ufal.br/_ingest/pipeline/attachment"
 ```
 
 ---
 
 ## Exemplo de uso (indexar documento com pipeline)
 
-```
-POST https://elastic.pnld-avaliacao-dev.nees.ufal.br/documentos_ifal_v2/_doc?pipeline=attachment_pipeline
-Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=
-Content-Type: application/json
-
-{
-  "data": "<BASE64_DO_PDF_AQUI>",
-  "filename": "resolucao_001_2025.pdf",
-  "ato": {
-    "ato_id": "res-001-2025",
-    "titulo": "Resolução nº 001/2025",
-    "tipo_doc": "resolucao",
-    "ano": 2025
-  }
-}
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=" \
+  "https://elastic.pnld-avaliacao-dev.nees.ufal.br/artefatos/_doc?pipeline=attachment" \
+  -d '{
+    "data": "<BASE64_DO_PDF_AQUI>",
+    "filename": "resolucao_001_2025.pdf",
+    "artefato": {
+      "artefato_id": "res-001-2025",
+      "titulo": "Resolução nº 001/2025",
+      "tipo": "resolucao"
+    }
+  }'
 ```
 
 Após a indexação, o documento terá:
@@ -92,18 +92,18 @@ Após a indexação, o documento terá:
 
 ## Testar o pipeline isoladamente (simulate)
 
-```
-POST https://elastic.pnld-avaliacao-dev.nees.ufal.br/_ingest/pipeline/attachment_pipeline/_simulate
-Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=
-Content-Type: application/json
-
-{
-  "docs": [
-    {
-      "_source": {
-        "data": "<BASE64_DO_PDF_AQUI>"
+```bash
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=" \
+  "https://elastic.pnld-avaliacao-dev.nees.ufal.br/_ingest/pipeline/attachment/_simulate" \
+  -d '{
+    "docs": [
+      {
+        "_source": {
+          "data": "<BASE64_DO_PDF_AQUI>"
+        }
       }
-    }
-  ]
-}
+    ]
+  }'
 ```

@@ -73,7 +73,7 @@
   source .venv/bin/activate
   python samples/test_extractor.py
   ```
-- [ ] **Validar pipeline ES** (quando ES estiver online):
+- [x] **Validar pipeline ES** (quando ES estiver online):
   1. Criar pipeline: executar curls de `elastic/setup/20260622_ingest_pipeline.md`
   2. Testar indexação com extração:
   ```
@@ -107,7 +107,7 @@
   - `GET /documentos/{id}`, `GET /documentos/by-filename/{filename}`
   - `GET /documentos` (listagem paginada)
   - `PATCH /documentos/{id}`, `DELETE /documentos/{id}`
-- [ ] **Validar** (ES online):
+- [x] **Validar** (ES online):
   1. Upload via curl:
   ```
   curl -X POST -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
@@ -153,7 +153,7 @@
   - `get_by_id`, `get_by_filename`, `delete`, `list_all`, `update_metadata`
   - Re-upload: deleta chunks antigos antes de reindexar
 - [x] Substituir stubs em `crud_artefatos.py`
-- [ ] **Validar** (ES online):
+- [x] **Validar** (ES online):
   1. Upload artefato:
   ```
   curl -X POST -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
@@ -198,7 +198,7 @@
 - [x] Flag `--enrich` (por agora stub: print "enrich not implemented yet")
 - [x] `--force` para sobrescrever existentes. Sem `--force` → pula se filename já existe.
 - [x] Progresso no terminal.
-- [ ] **Validar** (ES online):
+- [x] **Validar** (ES online):
   1. Ingestar artefatos do diretório samples:
   ```
   source .venv/bin/activate
@@ -246,86 +246,24 @@
 > **Ao final deste bloco**: Documentos podem ser enriquecidos (resumo, entidades, keywords, embedding, chunks). Validável via API e CLI.
 
 ### T-10: LLM Interface + Factory + primeiro provider
-- [ ] Criar `app/providers/base.py` (BaseLLMProvider ABC async):
-  - generate_summary, generate_embedding, extract_entities, extract_keywords, generate_response, health_check
-- [ ] Criar `app/providers/factory.py`
-- [ ] Implementar primeiro provider funcional (Gemini OU Ollama — o que estiver disponível para testar)
-- [ ] **Validar**: script que chama `generate_summary("texto de teste")` → retorna string
+- [x] Criar `app/providers/base.py` (BaseLLMProvider ABC async)
+- [x] Criar `app/providers/factory.py`
+- [x] Implementar GeminiProvider e ClaudeProvider (Ollama em aberto)
+- [x] Modelos configuráveis via `.env` (`GEMINI_TEXT_MODEL`, `GEMINI_EMBED_MODEL`, `CLAUDE_MODEL`)
+- [ ] **Validar**: `python tests/manual/t10_provider_smoke.py`
 
 ### T-11: EnrichmentService
-- [ ] Criar `app/services/enrichment.py`:
-  - `enrich_summary(index, doc_id, root)`
-  - `enrich_vector(index, doc_id, root)` — usa resumo como input
-  - `enrich_entities(index, doc_id, root)`
-  - `enrich_keywords(index, doc_id, root)`
-  - `enrich_chunks(index, chunks_index, doc_id, root)` — threshold 10k chars
-  - `enrich_all(index, chunks_index, doc_id, root)` — ordem: entidades → keywords → resumo → vetorização → chunking
-- [ ] **Validar**: chamar `enrich_all` em um doc já indexado → campos preenchidos no ES
+- [x] Criar `app/services/enrichment.py` com todos os métodos
+- [ ] **Validar**: `python tests/manual/t11_enrichment_service.py`
 
 ### T-12: Routers de enriquecimento
-- [ ] Substituir stubs em `enrichment_documentos.py` e `enrichment_artefatos.py`:
-  - POST `/{tipo}/summary/generate`
-  - POST `/{tipo}/vectorization/generate`
-  - POST `/{tipo}/entities/extract`
-  - POST `/{tipo}/keywords/extract`
-  - POST `/{tipo}/chunking/generate`
-  - POST `/{tipo}/{id}/enrich`
-  - GET `/{tipo}/{id}/enrichment-status`
-- [ ] **Validar**: POST /artefatos/summary/generate {document_id} → resumo gerado e gravado no ES
+- [x] `app/api/routers/enrichment.py` com todos os endpoints implementados
+- [ ] **Validar**: `bash tests/manual/t12_enrichment_api.sh` (servidor local rodando)
 
 ### T-13: CLI enrich
-- [ ] Comando `iuna enrich --source-type <tipo> --directory/--ids [flags]`
-- [ ] Flags: `--summarize`, `--vectorize`, `--entities`, `--keywords`, `--chunk`, `--enrich`
-- [ ] `--force`, `--skip-existing`, `--concurrency N`
-- [ ] Atualizar `iuna ingest --enrich` para chamar enrich_all após indexar
-- [ ] **Validar** (ES + Gemini online):
-  ```
-  source .venv/bin/activate
-
-  # Teste 1: Enriquecer um único doc por ID (todas as operações)
-  python -m app.cli.main enrich --source-type artefatos --ids <ARTEFATO_ID> --enrich
-  # Esperado: executa entidades → keywords → resumo → vetorização → chunking (se ≥10k)
-  # Mostra progresso para cada operação
-
-  # Teste 2: Enriquecer apenas resumo
-  python -m app.cli.main enrich --source-type artefatos --ids <ID> --summarize
-  # Esperado: gera apenas resumo, mostra ✅
-
-  # Teste 3: Enriquecer apenas entidades + keywords
-  python -m app.cli.main enrich --source-type artefatos --ids <ID> --entities --keywords
-  # Esperado: extrai entidades e keywords, mostra ✅
-
-  # Teste 4: Enriquecer diretório inteiro
-  python -m app.cli.main enrich --source-type artefatos --directory ./samples/ --enrich
-  # Esperado: processa cada arquivo da pasta (por filename), mostra [1/3], [2/3], [3/3]
-
-  # Teste 5: --skip-existing (pula docs já enriquecidos)
-  python -m app.cli.main enrich --source-type artefatos --directory ./samples/ --enrich --skip-existing
-  # Esperado: ⏭ para docs que já têm resumo_at preenchido
-
-  # Teste 6: --force (re-enriquece tudo)
-  python -m app.cli.main enrich --source-type artefatos --ids <ID> --enrich --force
-  # Esperado: sobrescreve resumo, entidades, vetor, chunks existentes
-
-  # Teste 7: Verificar enriquecimento no ES
-  curl -H "Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=" \
-    "https://elastic.pnld-avaliacao-dev.nees.ufal.br/artefatos/<ID>?pretty"
-  # Esperado: artefato.resumo preenchido, artefato.entidades[], artefato.keywords[], 
-  #           artefato.embedding_vector[], artefato.chunking_at preenchido
-
-  # Teste 8: Verificar chunks criados
-  curl -H "Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=" \
-    "https://elastic.pnld-avaliacao-dev.nees.ufal.br/artefatos_chunks/_search?q=parent_document_id:<ID>&pretty"
-  # Esperado: chunks com content e embedding_vector preenchidos
-
-  # Teste 9: iuna ingest --enrich (indexa + enriquece de uma vez)
-  python -m app.cli.main ingest --source-type artefatos --directory ./samples/ --force --enrich
-  # Esperado: indexa cada PDF, depois enriquece, mostra ambos os passos
-
-  # Teste 10: Concorrência
-  python -m app.cli.main enrich --source-type artefatos --directory ./samples/ --enrich --concurrency 1
-  # Esperado: processa sequencialmente (1 por vez)
-  ```
+- [x] Comando `iuna enrich` com todas as flags
+- [x] `iuna ingest --enrich` integrado
+- [ ] **Validar**: `bash tests/manual/t13_cli_enrich.sh`
 
 ---
 
@@ -334,45 +272,35 @@
 > **Ao final deste bloco**: Busca full-text, filtros, facetas, semelhantes, por entidade, por keyword, chunks e autocomplete funcionando.
 
 ### T-14: query_helpers.py
-- [ ] Criar `app/core/query_helpers.py` — funções puras:
-  - build_match_phrase, build_match_fuzzy, build_nested_entity_query
-  - build_highlight, build_term_filter, build_range_filter
-- [ ] **Validar**: import e chamar funções → dicts corretos
+- [x] Criar `app/core/query_helpers.py` — funções puras
+- [x] **Validar**: `python tests/manual/t14_query_helpers.py`
 
 ### T-15: DocumentosSearchService + Router
-- [ ] Criar `app/services/documentos_search.py`:
-  - search_fulltext (phrase + fuzzy + entidades + keywords + resumo, highlights)
-  - search_facets (agregações em requisição separada)
-  - search_similar (kNN / more_like_this)
-  - search_by_entity (nested query)
-  - search_by_keyword
-  - suggest (autocomplete)
-- [ ] Substituir stubs em `search_documentos.py`
-- [ ] **Validar**: buscar termo de um doc indexado via Swagger → retorna com highlights
+- [x] Criar `app/services/documentos_search.py` (estende `_search_base.py`)
+- [x] Substituir stubs em `search_documentos.py`
+- [x] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
 
 ### T-16: ArtefatosSearchService + Router
-- [ ] Criar `app/services/artefatos_search.py`:
-  - search_fulltext, search_similar, search_by_entity, search_by_keyword, suggest
-- [ ] Substituir stubs em `search_artefatos.py`
-- [ ] **Validar**: buscar artefato enriquecido → retorna
+- [x] Criar `app/services/artefatos_search.py`
+- [x] Substituir stubs em `search_artefatos.py`
+- [x] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
 
 ### T-17: ChunksSearchService + Router
-- [ ] Busca em chunks de ambos os índices
-- [ ] Endpoints: `GET /{tipo}/search/chunks`
-- [ ] **Validar**: buscar termo presente num chunk → retorna chunk com parent_id
+- [x] Criar `app/services/chunks_search.py`
+- [x] Endpoints: `GET /{tipo}/search/chunks`
+- [x] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
 
 ### T-18: Scoring (popularity)
-- [ ] Criar `app/core/scoring.py` (constantes SCORE_WEIGHTS)
-- [ ] Endpoints: `POST /{tipo}/{id}/score`
-- [ ] function_score na busca (boost por popularity_score)
-- [ ] **Validar**: score um doc → buscar novamente → ele sobe no ranking
+- [x] Criar `app/core/scoring.py` (constantes `SCORE_WEIGHTS`)
+- [x] Criar `app/services/scoring_service.py` (`increment_score`)
+- [x] Substituir stubs em `scoring.py`; `function_score` na busca
+- [x] **Validar**: `bash tests/manual/t18_scoring.sh`
 
 ### T-19: Listagem de entidades e keywords
-- [ ] `GET /documentos/entities` e `GET /artefatos/entities` — lista com contagem
-- [ ] `GET /documentos/keywords` e `GET /artefatos/keywords` — lista com contagem (se aplicável)
-- [ ] **Validar**: após enriquecer docs, listar entidades → retorna agregação
+- [x] `GET /documentos/entities`, `GET /artefatos/entities`
+- [x] `GET /documentos/keywords`, `GET /artefatos/keywords`
+- [x] **Validar**: `bash tests/manual/t19_entities_keywords.sh`
 
----
 
 ## Bloco 5 — Chat funcional
 
