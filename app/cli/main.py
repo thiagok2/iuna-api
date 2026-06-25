@@ -255,17 +255,175 @@ async def _run_ingest(
     typer.echo("")
     typer.echo(f"🏁 Ingestão finalizada: {success_count} sucesso, {error_count} erro(s)")
 
-    if enrich:
-        typer.echo("⚠️  --enrich: funcionalidade de enriquecimento ainda não implementada.")
+    if enrich and success_count > 0:
+        typer.echo("\n🧠 Iniciando enriquecimento dos documentos indexados...")
+        await _run_enrich(
+            source_type=source_type,
+            ids_str=None,
+            directory=directory,
+            ops={"entities", "keywords", "summary", "vectorization", "chunking"},
+            force=force,
+            skip_existing=False,
+            concurrency=concurrency,
+        )
 
 
 # ---------------------------------------------------------------------------
-# Stub commands
+# Comando: enrich
 # ---------------------------------------------------------------------------
 @app.command()
-def enrich() -> None:
-    """Enriquece documentos com IA (resumo, entidades, keywords)."""
-    typer.echo("Not implemented yet")
+def enrich(
+    source_type: str = typer.Option(..., "--source-type", help="documentos_ifal_v2 | artefatos"),
+    ids: str = typer.Option(None, "--ids", help="IDs separados por vírgula"),
+    directory: str = typer.Option(None, "--directory", help="Diretório com PDFs (resolve por filename)"),
+    summarize: bool = typer.Option(False, "--summarize", help="Gerar resumo"),
+    vectorize: bool = typer.Option(False, "--vectorize", help="Gerar embedding"),
+    entities: bool = typer.Option(False, "--entities", help="Extrair entidades"),
+    keywords: bool = typer.Option(False, "--keywords", help="Extrair keywords"),
+    chunk: bool = typer.Option(False, "--chunk", help="Gerar chunks"),
+    enrich_all: bool = typer.Option(False, "--enrich", help="Executar todas as operações"),
+    force: bool = typer.Option(False, "--force", help="Re-enriquecer mesmo se já existir"),
+    skip_existing: bool = typer.Option(False, "--skip-existing", help="Pular docs já enriquecidos"),
+    concurrency: int = typer.Option(3, "--concurrency", help="Concorrência máxima"),
+) -> None:
+    """Enriquece documentos com IA (resumo, entidades, keywords, embedding, chunks)."""
+    if not ids and not directory:
+        typer.echo("❌ Forneça --ids ou --directory")
+        raise typer.Exit(code=1)
+
+    ops: set[str] = set()
+    if enrich_all:
+        ops = {"entities", "keywords", "summary", "vectorization", "chunking"}
+    else:
+        if summarize:
+            ops.add("summary")
+        if vectorize:
+            ops.add("vectorization")
+        if entities:
+            ops.add("entities")
+        if keywords:
+            ops.add("keywords")
+        if chunk:
+            ops.add("chunking")
+
+    if not ops:
+        typer.echo("⚠️  Nenhuma operação selecionada. Use --enrich ou flags específicas (--summarize, --entities, etc.)")
+        raise typer.Exit(code=1)
+
+    asyncio.run(_run_enrich(source_type, ids, directory, ops, force, skip_existing, concurrency))
+
+
+async def _run_enrich(
+    source_type: str,
+    ids_str: str | None,
+    directory: str | None,
+    ops: set[str],
+    force: bool,
+    skip_existing: bool,
+    concurrency: int,
+) -> None:
+    from app.clients.es_client import es_client
+    from app.providers.factory import get_llm_provider
+    from app.services.enrichment import EnrichmentService
+
+    valid_types = ("documentos_ifal_v2", "artefatos")
+    if source_type not in valid_types:
+        typer.echo(f"❌ source-type inválido: {source_type}. Use: {', '.join(valid_types)}")
+        raise typer.Exit(code=1)
+
+    try:
+        await es_client.connect()
+    except Exception as exc:
+        typer.echo(f"❌ Erro ao conectar ao Elasticsearch: {exc}")
+        raise typer.Exit(code=1)
+
+    is_artefatos = source_type == "artefatos"
+    index = settings.index_artefatos if is_artefatos else settings.index_documentos_ifal_v2
+    chunks_index = settings.index_artefatos_chunks if is_artefatos else settings.index_documentos_ifal_v2_chunks
+    root = "artefato" if is_artefatos else "ato"
+
+    svc = EnrichmentService(es_client, get_llm_provider())
+
+    # Resolve IDs
+    doc_ids: list[str] = []
+
+    if ids_str:
+        doc_ids = [i.strip() for i in ids_str.split(",") if i.strip()]
+    elif directory:
+        dir_path = Path(directory)
+        if not dir_path.is_dir():
+            typer.echo(f"❌ Diretório não encontrado: {directory}")
+            await es_client.close()
+            raise typer.Exit(code=1)
+        pdf_files = sorted(dir_path.glob("*.pdf"))
+        if not pdf_files:
+            typer.echo(f"⚠️  Nenhum arquivo PDF encontrado em: {directory}")
+            await es_client.close()
+            raise typer.Exit(code=0)
+        for pdf in pdf_files:
+            result = await es_client.search(
+                index=index,
+                body={"query": {"term": {"filename.keyword": pdf.name}}, "size": 1},
+            )
+            hits = result.get("hits", {}).get("hits", [])
+            if hits:
+                doc_ids.append(hits[0]["_id"])
+            else:
+                typer.echo(f"  ⚠️  {pdf.name} não encontrado no índice — ignorado")
+
+    if not doc_ids:
+        typer.echo("⚠️  Nenhum documento para enriquecer.")
+        await es_client.close()
+        return
+
+    typer.echo(f"📌 {len(doc_ids)} doc(s) | Operações: {', '.join(sorted(ops))} | Skip-existing: {skip_existing}")
+    typer.echo("")
+
+    semaphore = asyncio.Semaphore(concurrency)
+    success_count = 0
+    error_count = 0
+    total = len(doc_ids)
+
+    async def _process(idx: int, doc_id: str) -> None:
+        nonlocal success_count, error_count
+        async with semaphore:
+            # skip_existing: verifica se resumo já existe (proxy de "enriquecido")
+            if skip_existing and not force:
+                try:
+                    doc = await es_client.get(index=index, id=doc_id)
+                    if doc.get("_source", {}).get(root, {}).get("resumo_at"):
+                        typer.echo(f"  ⏭  [{idx}/{total}] {doc_id} — já enriquecido, pulando")
+                        return
+                except Exception:
+                    pass
+
+            try:
+                if "entities" in ops:
+                    await svc.enrich_entities(index, doc_id, root)
+                if "keywords" in ops:
+                    await svc.enrich_keywords(index, doc_id, root)
+                if "summary" in ops:
+                    await svc.enrich_summary(index, doc_id, root)
+                if "vectorization" in ops:
+                    await svc.enrich_vector(index, doc_id, root)
+                if "chunking" in ops:
+                    n = await svc.enrich_chunks(index, chunks_index, doc_id, root)
+                    if n == 0:
+                        typer.echo(f"  ⏭  [{idx}/{total}] {doc_id} — chunking: content < 10000 chars")
+                        success_count += 1
+                        return
+                success_count += 1
+                typer.echo(f"  ✅ [{idx}/{total}] {doc_id}")
+            except Exception as exc:
+                error_count += 1
+                typer.echo(f"  ❌ [{idx}/{total}] {doc_id} — {exc}")
+
+    tasks = [_process(i + 1, doc_id) for i, doc_id in enumerate(doc_ids)]
+    await asyncio.gather(*tasks)
+
+    await es_client.close()
+    typer.echo("")
+    typer.echo(f"🏁 Enriquecimento finalizado: {success_count} sucesso, {error_count} erro(s)")
 
 
 @app.command()

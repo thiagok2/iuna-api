@@ -11,6 +11,7 @@ from app.api.dependencies import verify_token
 from app.api.models.requests import MetadataUpdate
 from app.api.models.responses import APIResponse, ErrorResponse, PaginatedResponse
 from app.clients.es_client import es_client
+from app.config import settings
 from app.core.exceptions import ConflictError, NotFoundError, ServiceUnavailableError, ValidationError
 from app.services.documentos_crud import DocumentosCrudService
 
@@ -79,7 +80,7 @@ async def upload_documento(
 
     service = _get_service()
     result = await service.upload(file_content, file.filename, metadata, force=force)
-    return APIResponse(data=result)
+    return APIResponse(data=result, meta={"index": settings.index_documentos_ifal_v2})
 
 
 @router.get(
@@ -97,7 +98,7 @@ async def get_documento(
 ):
     service = _get_service()
     doc = await service.get_by_id(document_id)
-    return APIResponse(data=doc)
+    return APIResponse(data=doc, meta={"index": settings.index_documentos_ifal_v2})
 
 
 @router.get(
@@ -115,7 +116,7 @@ async def get_documento_by_filename(
 ):
     service = _get_service()
     doc = await service.get_by_filename(filename)
-    return APIResponse(data=doc)
+    return APIResponse(data=doc, meta={"index": settings.index_documentos_ifal_v2})
 
 
 @router.get(
@@ -157,7 +158,7 @@ async def list_documentos(
 
     return PaginatedResponse(
         data=items,
-        meta={"page": page, "page_size": page_size, "total": total, "total_pages": total_pages},
+        meta={"page": page, "page_size": page_size, "total": total, "total_pages": total_pages, "index": settings.index_documentos_ifal_v2},
     )
 
 
@@ -178,7 +179,7 @@ async def update_documento(
     fields = body.model_dump(exclude_unset=True)
     service = _get_service()
     result = await service.update_metadata(document_id, fields)
-    return APIResponse(data=result)
+    return APIResponse(data=result, meta={"index": settings.index_documentos_ifal_v2})
 
 
 @router.delete(
@@ -196,4 +197,4 @@ async def delete_documento(
 ):
     service = _get_service()
     result = await service.delete(document_id)
-    return APIResponse(data=result)
+    return APIResponse(data=result, meta={"index": settings.index_documentos_ifal_v2})
