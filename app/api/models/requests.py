@@ -3,8 +3,9 @@ Request models (Pydantic schemas) for the IUNA API.
 Used for Body payloads and documented Query dependencies.
 """
 
+from typing import Literal, Optional
+
 from pydantic import BaseModel, Field
-from typing import Optional
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +122,7 @@ class AddArtefatoToSessionRequest(BaseModel):
 class ScoreRequest(BaseModel):
     """Registrar uma ação de interação do usuário."""
 
-    action: str = Field(
+    action: Literal["click", "add_to_chat", "download", "share"] = Field(
         ...,
         description="Tipo de ação: click | add_to_chat | download | share",
         examples=["click"],
