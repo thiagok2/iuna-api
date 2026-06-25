@@ -4,15 +4,25 @@ Entity and keyword listing routes — aggregated views.
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
 from app.api.dependencies import verify_token
 from app.api.models.responses import APIResponse
+from app.clients.es_client import es_client
+from app.config import settings
+from app.services.entities_listing_service import EntitiesListingService
 
 router = APIRouter(
     tags=["entities & keywords"],
     dependencies=[Depends(verify_token)],
 )
+
+_DOC_INDEX = lambda: settings.index_documentos_ifal_v2  # noqa: E731
+_ART_INDEX = lambda: settings.index_artefatos  # noqa: E731
+
+
+def _svc() -> EntitiesListingService:
+    return EntitiesListingService(es_client)
 
 
 @router.get(
@@ -30,7 +40,8 @@ async def list_documento_entities(
     page: int = Query(1, ge=1, description="Página", examples=[1]),
     page_size: int = Query(50, ge=1, le=500, description="Itens por página", examples=[50]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    items = await _svc().list_entities(_DOC_INDEX(), "ato", entity_type, min_count, page, page_size)
+    return APIResponse(data=items, meta={"page": page, "page_size": page_size})
 
 
 @router.get(
@@ -47,7 +58,8 @@ async def list_artefato_entities(
     page: int = Query(1, ge=1, description="Página", examples=[1]),
     page_size: int = Query(50, ge=1, le=500, description="Itens por página", examples=[50]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    items = await _svc().list_entities(_ART_INDEX(), "artefato", entity_type, min_count, page, page_size)
+    return APIResponse(data=items, meta={"page": page, "page_size": page_size})
 
 
 @router.get(
@@ -61,7 +73,8 @@ async def list_documento_keywords(
     page: int = Query(1, ge=1, description="Página", examples=[1]),
     page_size: int = Query(50, ge=1, le=500, description="Itens por página", examples=[50]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    items = await _svc().list_keywords(_DOC_INDEX(), "ato", min_count, page, page_size)
+    return APIResponse(data=items, meta={"page": page, "page_size": page_size})
 
 
 @router.get(
@@ -75,4 +88,5 @@ async def list_artefato_keywords(
     page: int = Query(1, ge=1, description="Página", examples=[1]),
     page_size: int = Query(50, ge=1, le=500, description="Itens por página", examples=[50]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    items = await _svc().list_keywords(_ART_INDEX(), "artefato", min_count, page, page_size)
+    return APIResponse(data=items, meta={"page": page, "page_size": page_size})
