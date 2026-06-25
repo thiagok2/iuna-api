@@ -10,6 +10,7 @@ def get_llm_provider() -> BaseLLMProvider:
                 api_key=settings.GEMINI_API_KEY,
                 text_model=settings.GEMINI_TEXT_MODEL,
                 embed_model=settings.GEMINI_EMBED_MODEL,
+                embed_dims=settings.GEMINI_EMBED_DIMS,
             )
         case "claude":
             from app.providers.claude import ClaudeProvider

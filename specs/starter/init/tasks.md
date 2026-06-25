@@ -250,20 +250,20 @@
 - [x] Criar `app/providers/factory.py`
 - [x] Implementar GeminiProvider e ClaudeProvider (Ollama em aberto)
 - [x] Modelos configuráveis via `.env` (`GEMINI_TEXT_MODEL`, `GEMINI_EMBED_MODEL`, `CLAUDE_MODEL`)
-- [ ] **Validar**: `python tests/manual/t10_provider_smoke.py`
+- [x] **Validar**: `PYTHONPATH=. python tests/manual/t10_provider_smoke.py`
 
 ### T-11: EnrichmentService
 - [x] Criar `app/services/enrichment.py` com todos os métodos
-- [ ] **Validar**: `python tests/manual/t11_enrichment_service.py`
+- [x] **Validar**: `PYTHONPATH=. python tests/manual/t11_enrichment_service.py`
 
 ### T-12: Routers de enriquecimento
 - [x] `app/api/routers/enrichment.py` com todos os endpoints implementados
-- [ ] **Validar**: `bash tests/manual/t12_enrichment_api.sh` (servidor local rodando)
+- [x] **Validar**: `bash tests/manual/t12_enrichment_api.sh` (servidor local rodando)
 
 ### T-13: CLI enrich
 - [x] Comando `iuna enrich` com todas as flags
 - [x] `iuna ingest --enrich` integrado
-- [ ] **Validar**: `bash tests/manual/t13_cli_enrich.sh`
+- [x] **Validar**: `bash tests/manual/t13_cli_enrich.sh`
 
 ---
 
@@ -273,34 +273,50 @@
 
 ### T-14: query_helpers.py
 - [x] Criar `app/core/query_helpers.py` — funções puras
-- [x] **Validar**: `python tests/manual/t14_query_helpers.py`
+- [ ] **Validar**: `PYTHONPATH=. python tests/manual/t14_query_helpers.py`
 
 ### T-15: DocumentosSearchService + Router
 - [x] Criar `app/services/documentos_search.py` (estende `_search_base.py`)
 - [x] Substituir stubs em `search_documentos.py`
-- [x] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
+- [ ] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
 
 ### T-16: ArtefatosSearchService + Router
 - [x] Criar `app/services/artefatos_search.py`
 - [x] Substituir stubs em `search_artefatos.py`
-- [x] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
+- [ ] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
 
 ### T-17: ChunksSearchService + Router
 - [x] Criar `app/services/chunks_search.py`
 - [x] Endpoints: `GET /{tipo}/search/chunks`
-- [x] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
+- [ ] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
 
 ### T-18: Scoring (popularity)
 - [x] Criar `app/core/scoring.py` (constantes `SCORE_WEIGHTS`)
 - [x] Criar `app/services/scoring_service.py` (`increment_score`)
 - [x] Substituir stubs em `scoring.py`; `function_score` na busca
-- [x] **Validar**: `bash tests/manual/t18_scoring.sh`
+- [ ] **Validar**: `bash tests/manual/t18_scoring.sh`
 
 ### T-19: Listagem de entidades e keywords
 - [x] `GET /documentos/entities`, `GET /artefatos/entities`
 - [x] `GET /documentos/keywords`, `GET /artefatos/keywords`
-- [x] **Validar**: `bash tests/manual/t19_entities_keywords.sh`
+- [ ] **Validar**: `bash tests/manual/t19_entities_keywords.sh`
 
+### T-19b: Busca Legado (documentos_ifal)
+- [x] Criar `app/services/legado_search_service.py`:
+  - `search(index, q, page, page_size, exact_phrase, tipo_doc, esfera, ano, orgao, publico, periodo, with_aggregations)`
+  - `get_by_id(index, doc_id)` — equivalente ao `viewNormativa` do Laravel
+  - `similar(index, doc_id, page_size)` — MLT em `ato.ementa` + `ato.tags`
+  - `_periodo_to_range(periodo)` — converte `"2024"` ou `"2020-2024"` para filtro range ES
+- [x] Criar `app/api/routers/search_legado.py` (prefixo `/legado/documentos`, tag `legado - documentos_ifal`):
+  - `GET /search` com filtros legados + `exact_phrase` + `with_aggregations` (default `True`)
+  - `GET /{doc_id}/similar` registrado **antes** de `/{doc_id}` (evitar conflito FastAPI)
+  - `GET /{doc_id}` (viewNormativa)
+- [x] Adicionar `index_documentos_ifal` (property) em `app/config.py`
+- [x] Registrar `search_legado_router` em `app/main.py`
+- [x] Propagar `exact_phrase` e `with_aggregations` para `search_documentos.py` e `search_artefatos.py` (v2)
+- [ ] **Validar**: `bash tests/manual/t19b_busca_legado.sh`
+
+---
 
 ## Bloco 5 — Chat funcional
 

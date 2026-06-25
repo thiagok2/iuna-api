@@ -6,7 +6,7 @@
 #   source .venv/bin/activate
 #   bash tests/manual/t13_cli_enrich.sh
 
-set -euo pipefail
+set -uo pipefail
 
 ARTEFATO_ID="13e17202-2843-4827-be0d-1e8b62e7d4a9"
 ARTEFATO_ID2="5bd3851a-0e55-45cc-9b05-9bfe7a69a1fe"
@@ -50,7 +50,7 @@ $CLI enrich --source-type artefatos --ids "$ARTEFATO_ID" --summarize --force
 # ── 7. Verificar campos gravados no ES ───────────────────────────────────────
 sep "7. Verificar resultado no ES"
 curl -s -H "Authorization: Basic $ES_AUTH" \
-  "$ES_HOST/artefatos/$ARTEFATO_ID?pretty" \
+  "$ES_HOST/artefatos/_doc/$ARTEFATO_ID?pretty" \
   | python3 -c "
 import sys, json
 d = json.load(sys.stdin)

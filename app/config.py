@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_TEXT_MODEL: str = "gemini-2.0-flash"
     GEMINI_EMBED_MODEL: str = "gemini-embedding-001"
+    GEMINI_EMBED_DIMS: int = 768
     CLAUDE_API_KEY: Optional[str] = None
     CLAUDE_MODEL: str = "claude-haiku-4-5"
     OLLAMA_BASE_URL: str = "http://localhost:11434"

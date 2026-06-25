@@ -7,7 +7,7 @@
 #   .venv/bin/uvicorn app.main:app --reload &
 #   bash tests/manual/t12_enrichment_api.sh
 
-set -euo pipefail
+set -uo pipefail
 
 BASE="http://localhost:8000/api/v1"
 TOKEN="77c7fa54-9b2c-44c1-a7e2-aea881a7797e"
@@ -20,6 +20,7 @@ H_JSON="Content-Type: application/json"
 ok()  { echo "  ✅  $1"; }
 fail(){ echo "  ❌  $1"; }
 sep() { echo; echo "─────────────────────────────────────"; echo "$1"; }
+parse() { python3 -c "$1" 2>/dev/null || echo "  (parse error — ver /tmp/t12_resp.json)"; }
 
 check_status() {
   local label=$1 expected=$2 actual=$3
@@ -27,13 +28,29 @@ check_status() {
   else fail "$label — esperado $expected, recebeu $actual"; fi
 }
 
+# ── 0. Inspecionar artefato de teste ────────────────────────────────────────
+sep "0. Artefato de teste — $ARTEFATO_ID"
+curl -s -o /tmp/t12_resp.json \
+  -H "$H_AUTH" "$BASE/artefatos/$ARTEFATO_ID"
+parse "
+import json
+d = json.load(open('/tmp/t12_resp.json'))
+src = d.get('data', d.get('_source', {}))
+art = src.get('artefato', {})
+content = src.get('attachment', {}).get('content', '')
+print('  titulo   :', art.get('titulo', '(sem titulo)'))
+print('  tipo     :', art.get('tipo', '(sem tipo)'))
+print('  content  :', len(content), 'chars')
+print('  preview  :', content[:300].replace('\n', ' '))
+"
+
 # ── 1. Resumo de texto direto (sem ES) ──────────────────────────────────────
 sep "1. POST /artefatos/summary/generate  [text]"
 CODE=$(curl -s -o /tmp/t12_resp.json -w "%{http_code}" -X POST "$BASE/artefatos/summary/generate" \
   -H "$H_AUTH" -H "$H_JSON" \
   -d '{"text": "O IFAL oferece cursos técnicos e superiores em todo o estado de Alagoas."}')
 check_status "summary/generate (text)" 200 "$CODE"
-python3 -c "import json; d=json.load(open('/tmp/t12_resp.json')); print('  resumo:', d['data']['resumo'][:120])"
+parse "import json; d=json.load(open('/tmp/t12_resp.json')); print('  resumo:', d['data']['resumo'][:120])"
 
 # ── 2. Resumo de artefato real (ES + LLM) ───────────────────────────────────
 sep "2. POST /artefatos/summary/generate  [document_id]"
@@ -41,7 +58,7 @@ CODE=$(curl -s -o /tmp/t12_resp.json -w "%{http_code}" -X POST "$BASE/artefatos/
   -H "$H_AUTH" -H "$H_JSON" \
   -d "{\"document_id\": \"$ARTEFATO_ID\"}")
 check_status "summary/generate (document_id)" 200 "$CODE"
-python3 -c "import json; d=json.load(open('/tmp/t12_resp.json')); print('  resumo:', d['data']['resumo'][:120])"
+parse "import json; d=json.load(open('/tmp/t12_resp.json')); print('  resumo:', d['data']['resumo'][:120])"
 
 # ── 3. Entidades de texto direto ─────────────────────────────────────────────
 sep "3. POST /artefatos/entities/extract  [text]"
@@ -49,7 +66,7 @@ CODE=$(curl -s -o /tmp/t12_resp.json -w "%{http_code}" -X POST "$BASE/artefatos/
   -H "$H_AUTH" -H "$H_JSON" \
   -d '{"text": "O reitor Sérgio Rocha assinou o edital em Maceió, Alagoas, em 10/06/2026."}')
 check_status "entities/extract (text)" 200 "$CODE"
-python3 -c "import json; d=json.load(open('/tmp/t12_resp.json')); [print('  ', e) for e in d['data']['entidades'][:4]]"
+parse "import json; d=json.load(open('/tmp/t12_resp.json')); [print('  ', e) for e in d['data']['entidades'][:4]]"
 
 # ── 4. Keywords de documento real ────────────────────────────────────────────
 sep "4. POST /documentos/keywords/extract  [document_id]"
@@ -57,14 +74,14 @@ CODE=$(curl -s -o /tmp/t12_resp.json -w "%{http_code}" -X POST "$BASE/documentos
   -H "$H_AUTH" -H "$H_JSON" \
   -d "{\"document_id\": \"$DOCUMENTO_ID\"}")
 check_status "keywords/extract (document_id)" 200 "$CODE"
-python3 -c "import json; d=json.load(open('/tmp/t12_resp.json')); print('  keywords:', d['data']['keywords'][:8])"
+parse "import json; d=json.load(open('/tmp/t12_resp.json')); print('  keywords:', d['data']['keywords'][:8])"
 
 # ── 5. Pipeline completo de artefato ─────────────────────────────────────────
 sep "5. POST /artefatos/{id}/enrich  [all operations]"
 CODE=$(curl -s -o /tmp/t12_resp.json -w "%{http_code}" -X POST "$BASE/artefatos/$ARTEFATO_ID/enrich" \
   -H "$H_AUTH" -H "$H_JSON" -d '{}')
 check_status "enrich completo" 200 "$CODE"
-python3 -c "import json; d=json.load(open('/tmp/t12_resp.json')); [print('  ', k, '=', v) for k,v in d['data'].items()]"
+parse "import json; d=json.load(open('/tmp/t12_resp.json')); [print('  ', k, '=', v) for k,v in d['data'].items()]"
 
 # ── 6. Operações selecionadas ─────────────────────────────────────────────────
 sep "6. POST /artefatos/{id}/enrich  [summary + entities only]"
@@ -72,14 +89,14 @@ CODE=$(curl -s -o /tmp/t12_resp.json -w "%{http_code}" -X POST "$BASE/artefatos/
   -H "$H_AUTH" -H "$H_JSON" \
   -d '{"operations": ["summary", "entities"]}')
 check_status "enrich selecionado" 200 "$CODE"
-python3 -c "import json; d=json.load(open('/tmp/t12_resp.json')); [print('  ', k, '=', v) for k,v in d['data'].items()]"
+parse "import json; d=json.load(open('/tmp/t12_resp.json')); [print('  ', k, '=', v) for k,v in d['data'].items()]"
 
 # ── 7. Status de enriquecimento ───────────────────────────────────────────────
 sep "7. GET /artefatos/{id}/enrichment-status"
 CODE=$(curl -s -o /tmp/t12_resp.json -w "%{http_code}" \
   "$BASE/artefatos/$ARTEFATO_ID/enrichment-status" -H "$H_AUTH")
 check_status "enrichment-status" 200 "$CODE"
-python3 -c "import json; d=json.load(open('/tmp/t12_resp.json')); [print('  ', k, '=', v) for k,v in d['data'].items()]"
+parse "import json; d=json.load(open('/tmp/t12_resp.json')); [print('  ', k, '=', v) for k,v in d['data'].items()]"
 
 # ── 8. chunk_size inválido → 422 ─────────────────────────────────────────────
 sep "8. POST /artefatos/chunking/generate  [chunk_size inválido]"

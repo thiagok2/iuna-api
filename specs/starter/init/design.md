@@ -323,6 +323,10 @@ settings = Settings()
 | | **Scoring / Relevância por Uso** | | |
 | 49 | POST | `/documentos/{document_id}/score` | Registrar interação (click, add-to-chat, etc.) |
 | 50 | POST | `/artefatos/{artefato_id}/score` | Registrar interação |
+| | **Busca Legado — documentos_ifal** | | |
+| 51 | GET | `/legado/documentos/search` | Full-text legado com filtros + `exact_phrase` + `with_aggregations` |
+| 52 | GET | `/legado/documentos/{doc_id}/similar` | Similares MLT (ato.ementa + ato.tags) |
+| 53 | GET | `/legado/documentos/{doc_id}` | Documento por ES _id (viewNormativa) |
 
 > Todas as rotas (exceto 1, 2) estão sob `/api/v1/` e exigem `Authorization: Bearer <token>`.
 > O prefixo `/documentos/` ou `/artefatos/` no path define o tipo — mesmo controller pode servir ambos internamente.
@@ -2207,6 +2211,10 @@ Header `X-Request-Id` em todas as respostas.
 | 14 | **Bearer token simples** | Consumidores são apps, não humanos. Token único é suficiente. |
 | 15 | **ES via HTTPS com `verify_certs=False`** | Instância de dev usa certificado auto-assinado. Em produção, habilitar verificação. |
 | 16 | **SDK `google-genai` para Gemini** | Pacote oficial moderno. `google-generativeai` está deprecated. Exponential backoff obrigatório por rate limits do free tier. |
+| 17 | **LegadoSearchService standalone (não estende BaseSearchService)** | O índice legado não tem `popularity_score` — sem `function_score`. Replicar comportamento exato do Laravel é mais direto sem herança forçada de uma base que pressupõe enriquecimento. |
+| 18 | **`with_aggregations=true` por padrão no legado** | O sistema Laravel retornava facetas junto com a busca na página 1. Manter esse default evita breaking change para clientes migrando do legado. Para v2, default é `false` — cliente controla se usa `/facets` ou `with_aggregations`. |
+| 19 | **`/{doc_id}/similar` registrado antes de `/{doc_id}`** | FastAPI casa rotas em ordem de registro. Sem essa ordenação, o segmento "similar" seria capturado como `doc_id` pela rota genérica. |
+| 20 | **`exact_phrase` e `with_aggregations` propagados para v2** | Parâmetros introduzidos no legado que trazem valor para todos os endpoints de busca. Consistência de interface entre legado e v2. |
 
 ---
 
@@ -2336,6 +2344,93 @@ sequenceDiagram
     end
 
     CLI-->>Operator: ✓ 42 documentos enriquecidos
+```
+
+---
+
+## 19. LegadoSearchService
+
+Serviço standalone para o índice `documentos_ifal` (legado pré-enriquecimento).
+**Não estende `BaseSearchService`** — o índice legado não possui `popularity_score` (sem `function_score`), nem entidades, keywords ou embedding. Replicar a lógica do `IndexController` e `viewNormativa` do sistema Laravel legado.
+
+### 19.1 Diferenças em relação ao DocumentosSearchService (v2)
+
+| Aspecto | v2 (`documentos_ifal_v2`) | Legado (`documentos_ifal`) |
+|---------|--------------------------|---------------------------|
+| Enriquecimento | resumo, entidades, keywords, embedding | **Não possui** |
+| Boost de popularidade | `function_score` com `popularity_score` | **Não aplica** |
+| MLT similar | `attachment.content` + campos ato | Apenas `ato.ementa` + `ato.tags` |
+| Facetas | endpoint dedicado `/facets` + `with_aggregations=false` | Sem endpoint dedicado, `with_aggregations=true` por padrão |
+| Filtro de período | `data_inicio`/`data_fim` (datas ISO) | `periodo` string (`"2024"` ou `"2020-2024"`) |
+| Fallback automático | Não | Sim — sem `tipo_doc` se 0 resultados |
+
+### 19.2 Estrutura de Arquivos
+
+```
+app/
+├── services/
+│   └── legado_search_service.py    # LegadoSearchService (standalone)
+├── api/
+│   └── routers/
+│       └── search_legado.py        # GET /legado/documentos/search|/{id}|/{id}/similar
+└── config.py                       # +index_documentos_ifal property
+```
+
+### 19.3 LegadoSearchService
+
+```python
+# app/services/legado_search_service.py
+
+def _periodo_to_range(periodo: str) -> dict | None:
+    """
+    "2024"       → {"gte": "2024-01-01", "lte": "2024-12-31"}
+    "2020-2024"  → {"gte": "2020-01-01", "lte": "2024-12-31"}
+    "all" / None → None (sem filtro)
+    """
+
+class LegadoSearchService:
+    async def search(index, q, page, page_size, exact_phrase, tipo_doc,
+                     esfera, ano, orgao, publico, periodo, with_aggregations) -> dict:
+        """
+        Monta multi_match (best_fields+fuzziness ou phrase) com filtros.
+        with_aggregations=True: inclui aggs de tipo_doc, esfera, ano.
+        Fallback: se total==0 e tipo_doc, repete sem tipo_doc.
+        """
+
+    async def get_by_id(index, doc_id) -> dict:
+        """
+        Recupera documento pelo ES _id (= ato.arquivo no legado).
+        Retorna: {id, arquivo_id, source, ato, filename}
+        Equivalente ao viewNormativa do Laravel.
+        """
+
+    async def similar(index, doc_id, page_size=6) -> dict:
+        """
+        More Like This em ato.ementa + ato.tags.
+        Equivalente ao likeDocuments do Laravel.
+        """
+```
+
+### 19.4 Router search_legado.py
+
+```
+Prefixo: /legado/documentos
+Tag:     legado - documentos_ifal
+Auth:    Depends(verify_token)
+
+Ordem de registro (crítica):
+  1. GET /search
+  2. GET /{doc_id}/similar   ← ANTES de /{doc_id} (FastAPI casa rota mais específica primeiro)
+  3. GET /{doc_id}
+```
+
+### 19.5 Configuração
+
+```python
+# app/config.py — property adicionada
+@property
+def index_documentos_ifal(self) -> str:
+    return f"documentos_ifal{self.ES_INDEX_SUFFIX}"
 ```
 
 ---

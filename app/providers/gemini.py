@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 
 from google import genai
 
@@ -17,10 +18,12 @@ class GeminiProvider(BaseLLMProvider):
         api_key: str,
         text_model: str = "gemini-2.0-flash",
         embed_model: str = "gemini-embedding-001",
+        embed_dims: int = 768,
     ):
         self._client = genai.Client(api_key=api_key)
         self._text_model = text_model
         self._embed_model = embed_model
+        self._embed_dims = embed_dims
 
     async def generate_summary(self, text: str) -> str:
         prompt = (
@@ -82,7 +85,7 @@ class GeminiProvider(BaseLLMProvider):
         except Exception:
             return False
 
-    async def _generate(self, prompt: str, max_retries: int = 3) -> str:
+    async def _generate(self, prompt: str, max_retries: int = 5) -> str:
         for attempt in range(max_retries):
             try:
                 response = await self._client.aio.models.generate_content(
@@ -92,27 +95,29 @@ class GeminiProvider(BaseLLMProvider):
             except Exception as exc:
                 if attempt == max_retries - 1:
                     raise
-                if _is_rate_limit(exc):
-                    delay = 2.0 * (2**attempt)
-                    logger.warning("Gemini rate limit, aguardando %.0fs (tentativa %d)", delay, attempt + 1)
+                if _is_retryable(exc):
+                    delay = 2.0 * (2**attempt) + random.uniform(0, 1)
+                    logger.warning("Gemini indisponível, aguardando %.1fs (tentativa %d/%d)", delay, attempt + 1, max_retries)
                     await asyncio.sleep(delay)
                 else:
                     raise
         return ""
 
-    async def _embed(self, text: str, max_retries: int = 3) -> list[float]:
+    async def _embed(self, text: str, max_retries: int = 5) -> list[float]:
         for attempt in range(max_retries):
             try:
                 result = await self._client.aio.models.embed_content(
-                    model=self._embed_model, contents=text
+                    model=self._embed_model,
+                    contents=text,
+                    config={"output_dimensionality": self._embed_dims},
                 )
                 return list(result.embeddings[0].values)
             except Exception as exc:
                 if attempt == max_retries - 1:
                     raise
-                if _is_rate_limit(exc):
-                    delay = 2.0 * (2**attempt)
-                    logger.warning("Gemini rate limit, aguardando %.0fs (tentativa %d)", delay, attempt + 1)
+                if _is_retryable(exc):
+                    delay = 2.0 * (2**attempt) + random.uniform(0, 1)
+                    logger.warning("Gemini embed indisponível, aguardando %.1fs (tentativa %d/%d)", delay, attempt + 1, max_retries)
                     await asyncio.sleep(delay)
                 else:
                     raise
@@ -139,6 +144,9 @@ class GeminiProvider(BaseLLMProvider):
         return default
 
 
-def _is_rate_limit(exc: Exception) -> bool:
+def _is_retryable(exc: Exception) -> bool:
     msg = str(exc).lower()
-    return any(kw in msg for kw in ("429", "rate", "quota", "resource exhausted"))
+    return any(kw in msg for kw in (
+        "429", "rate", "quota", "resource exhausted",
+        "503", "unavailable", "overloaded", "try again",
+    ))

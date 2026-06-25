@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 
 import anthropic
 
@@ -80,7 +81,7 @@ class ClaudeProvider(BaseLLMProvider):
         except Exception:
             return False
 
-    async def _generate(self, prompt: str, max_retries: int = 3) -> str:
+    async def _generate(self, prompt: str, max_retries: int = 5) -> str:
         for attempt in range(max_retries):
             try:
                 response = await self._client.messages.create(
@@ -89,11 +90,11 @@ class ClaudeProvider(BaseLLMProvider):
                     messages=[{"role": "user", "content": prompt}],
                 )
                 return response.content[0].text if response.content else ""
-            except anthropic.RateLimitError as exc:
+            except (anthropic.RateLimitError, anthropic.OverloadedError, anthropic.APIConnectionError) as exc:
                 if attempt == max_retries - 1:
-                    raise
-                delay = 2.0 * (2**attempt)
-                logger.warning("Claude rate limit, aguardando %.0fs (tentativa %d)", delay, attempt + 1)
+                    raise ServiceUnavailableError(f"Claude API error: {exc}") from exc
+                delay = 2.0 * (2**attempt) + random.uniform(0, 1)
+                logger.warning("Claude indisponível (%s), aguardando %.1fs (tentativa %d/%d)", type(exc).__name__, delay, attempt + 1, max_retries)
                 await asyncio.sleep(delay)
             except anthropic.APIError as exc:
                 raise ServiceUnavailableError(f"Claude API error: {exc}") from exc

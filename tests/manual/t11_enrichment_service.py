@@ -25,7 +25,7 @@ ES_HOST = "https://elastic.pnld-avaliacao-dev.nees.ufal.br"
 def _check_es(doc_id: str) -> dict:
     result = subprocess.run(
         ["curl", "-s", "-H", f"Authorization: Basic {ES_AUTH}",
-         f"{ES_HOST}/{ARTEFATO_INDEX}/{doc_id}?pretty"],
+         f"{ES_HOST}/{ARTEFATO_INDEX}/_doc/{doc_id}?pretty"],
         capture_output=True, text=True,
     )
     doc = json.loads(result.stdout)

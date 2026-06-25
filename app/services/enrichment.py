@@ -6,6 +6,7 @@ Recebe (index, doc_id, root) para operar em qualquer tipo de documento:
 - artefatos          → root="artefato"
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -168,10 +169,21 @@ class EnrichmentService:
             raise ServiceUnavailableError(f"Elasticsearch indisponível: {exc}")
 
     async def _update(self, index: str, doc_id: str, root: str, fields: dict) -> None:
-        try:
-            await self.es.update(index=index, id=doc_id, body={root: fields})
-        except Exception as exc:
-            raise ServiceUnavailableError(f"Elasticsearch indisponível: {exc}")
+        for attempt in range(3):
+            try:
+                await self.es.update(index=index, id=doc_id, body={root: fields})
+                return
+            except Exception as exc:
+                msg = str(exc).lower()
+                if attempt < 2 and any(k in msg for k in ("timeout", "connection", "timed out")):
+                    logger.warning("ES timeout ao atualizar %s, reconectando (tentativa %d/3)", doc_id, attempt + 1)
+                    await asyncio.sleep(2.0 * (attempt + 1))
+                    try:
+                        await self.es.reconnect()
+                    except Exception:
+                        pass
+                else:
+                    raise ServiceUnavailableError(f"Elasticsearch indisponível: {exc}")
 
     @staticmethod
     def _get_content(doc: dict) -> str:

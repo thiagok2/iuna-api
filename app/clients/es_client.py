@@ -33,13 +33,23 @@ class ESClient:
                 settings.ELASTICSEARCH_PASSWORD,
             )
 
-        self._instance = AsyncElasticsearch(**kwargs)
+        self._instance = AsyncElasticsearch(
+            **kwargs,
+            request_timeout=60,
+            retry_on_timeout=True,
+            max_retries=3,
+        )
 
     async def close(self) -> None:
         """Close the Elasticsearch connection."""
         if self._instance is not None:
             await self._instance.close()
             self._instance = None
+
+    async def reconnect(self) -> None:
+        """Force close and reopen the connection."""
+        await self.close()
+        await self.connect()
 
     @property
     def client(self) -> AsyncElasticsearch:

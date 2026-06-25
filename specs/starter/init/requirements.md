@@ -151,6 +151,26 @@ A IUNA API é uma API REST construída com FastAPI para processamento inteligent
 - **RF-03u.14**: Sugestões de títulos e tags.
 - **RF-03u.15**: `limit` (default 5).
 
+#### RF-03a — Parâmetros Adicionais (`documentos` v2)
+- **RF-03a.12**: `exact_phrase: bool` (default `false`) — quando `true`, usa `match_phrase` em vez de `multi_match` com fuzziness em todos os campos.
+- **RF-03a.13**: `with_aggregations: bool` (default `false`) — retorna facetas de `tipo_doc`, `orgao`, `esfera` e `ano` junto com os resultados. Use `false` (padrão) quando já tiver chamado `/facets` separadamente.
+
+#### RF-03b — Parâmetros Adicionais (`artefatos`)
+- **RF-03b.4**: `exact_phrase: bool` (default `false`) — mesma semântica de RF-03a.12.
+- **RF-03b.5**: `with_aggregations: bool` (default `false`) — retorna facetas de `tipo` e `disciplina` junto com os resultados.
+
+#### RF-03c — Busca Legado (`documentos_ifal`)
+- **RF-03c.1**: `GET /api/v1/legado/documentos/search` — busca no índice legado `documentos_ifal` (pré-enriquecimento). Campos pesquisados: `attachment.content`, `ato.titulo^2`, `ato.ementa^1.5`, `ato.tags`.
+- **RF-03c.2**: O índice legado não possui campos de enriquecimento: sem `ato.resumo`, `ato.keywords`, `ato.entidades`, `ato.embedding_vector`, sem `popularity_score`. Sem `function_score`.
+- **RF-03c.3**: Filtros disponíveis: `tipo_doc`, `esfera`, `ano`, `orgao`, `publico`, `periodo`.
+- **RF-03c.4**: `periodo` aceita: `"2024"` (ano inteiro → range `2024-01-01` a `2024-12-31`) ou `"2020-2024"` (intervalo de anos), aplicado em `ato.data_publicacao`.
+- **RF-03c.5**: `exact_phrase: bool` — quando `true`, usa `match_phrase` em vez de `multi_match` com fuzziness.
+- **RF-03c.6**: `with_aggregations: bool` (default `true`) — retorna facetas de `tipo_doc`, `esfera` e `ano` junto com os resultados. Default `true` replica comportamento da página 1 do sistema legado. Desativar em páginas subsequentes para menor latência.
+- **RF-03c.7**: Auto-fallback: se 0 resultados com `tipo_doc` ativo, retenta automaticamente sem o filtro (replica comportamento do controlador Laravel legado).
+- **RF-03c.8**: `GET /api/v1/legado/documentos/{doc_id}` — retorna o documento completo pelo ES `_id` (equivalente ao `viewNormativa` do Laravel). No índice legado, o `_id` é o próprio `ato.arquivo` (caminho/nome do arquivo).
+- **RF-03c.9**: `GET /api/v1/legado/documentos/{doc_id}/similar` — documentos similares via More Like This nos campos `ato.ementa` + `ato.tags` (únicos campos ricos disponíveis no índice legado sem enriquecimento).
+- **RF-03c.10**: A rota `/{doc_id}/similar` deve estar registrada antes de `/{doc_id}` para evitar que o FastAPI interprete "similar" como um `doc_id`.
+
 #### Regras universais de busca
 - **RF-03u.16**: `q` vazio/ausente → HTTP 400.
 - **RF-03u.17**: Paginação: `page` (default 1), `page_size` (default 20).
