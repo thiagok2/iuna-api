@@ -4,16 +4,31 @@ Search routes for documentos.
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, Query, Path
 
 from app.api.dependencies import verify_token
 from app.api.models.responses import APIResponse, SearchResponse
+from app.clients.es_client import es_client
+from app.config import settings
+from app.services.chunks_search import ChunksSearchService
+from app.services.documentos_search import DocumentosSearchService
 
 router = APIRouter(
     prefix="/documentos/search",
     tags=["documentos - search"],
     dependencies=[Depends(verify_token)],
 )
+
+_INDEX = lambda: settings.index_documentos_ifal_v2  # noqa: E731
+_CHUNKS = lambda: settings.index_documentos_ifal_v2_chunks  # noqa: E731
+
+
+def _svc() -> DocumentosSearchService:
+    return DocumentosSearchService(es_client)
+
+
+def _chunks_svc() -> ChunksSearchService:
+    return ChunksSearchService(es_client)
 
 
 @router.get(
@@ -37,8 +52,27 @@ async def search_documentos(
     data_inicio: Optional[str] = Query(None, description="Data início (YYYY-MM-DD)", examples=["2024-01-01"]),
     data_fim: Optional[str] = Query(None, description="Data fim (YYYY-MM-DD)", examples=["2024-12-31"]),
     categoria: Optional[str] = Query(None, description="Filtro por categoria: institucional | didatico | projeto", examples=["institucional"]),
+    exact_phrase: bool = Query(False, description="Busca por frase exata (match_phrase)"),
+    with_aggregations: bool = Query(
+        False,
+        description="Incluir agregações (tipo_doc, orgao, esfera, ano) junto com os resultados. "
+        "Use `false` (padrão) quando já tiver chamado `/facets` separadamente.",
+    ),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    filters: dict = {
+        "ato.tipo_doc.keyword": tipo_doc,
+        "ato.fonte.orgao.keyword": orgao,
+        "ato.fonte.esfera.keyword": esfera,
+        "ato.ano": ano,
+    }
+    result = await _svc().search_fulltext(
+        _INDEX(), q, page, page_size, filters, exact_phrase, with_aggregations
+    )
+    return SearchResponse(
+        data=result["results"],
+        meta={"page": page, "page_size": page_size, "total": result["total"], "query": q},
+        facets=result.get("aggregations"),
+    )
 
 
 @router.get(
@@ -56,7 +90,14 @@ async def search_documentos_facets(
     ano: Optional[int] = Query(None, description="Filtro por ano", examples=[2024]),
     categoria: Optional[str] = Query(None, description="Filtro por categoria", examples=["institucional"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    filters: dict = {
+        "ato.tipo_doc.keyword": tipo_doc,
+        "ato.fonte.orgao.keyword": orgao,
+        "ato.fonte.esfera.keyword": esfera,
+        "ato.ano": ano,
+    }
+    result = await _svc().search_facets(_INDEX(), q, filters)
+    return APIResponse(data=result, meta={"total": result["total"]})
 
 
 @router.get(
@@ -70,7 +111,11 @@ async def search_documentos_similar(
     document_id: str = Path(..., description="ID do documento de referência", examples=["abc123"]),
     page_size: int = Query(10, ge=1, le=50, description="Quantidade de resultados", examples=[10]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    result = await _svc().search_similar(_INDEX(), document_id, page_size)
+    return SearchResponse(
+        data=result["results"],
+        meta={"total": result["total"]},
+    )
 
 
 @router.get(
@@ -86,7 +131,11 @@ async def search_documentos_by_entity(
     page: int = Query(1, ge=1, description="Página", examples=[1]),
     page_size: int = Query(20, ge=1, le=100, description="Itens por página", examples=[20]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    result = await _svc().search_by_entity(_INDEX(), entity, entity_type, page, page_size)
+    return SearchResponse(
+        data=result["results"],
+        meta={"page": page, "page_size": page_size, "total": result["total"]},
+    )
 
 
 @router.get(
@@ -100,7 +149,11 @@ async def search_documentos_by_keyword(
     page: int = Query(1, ge=1, description="Página", examples=[1]),
     page_size: int = Query(20, ge=1, le=100, description="Itens por página", examples=[20]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    result = await _svc().search_by_keyword(_INDEX(), keyword, page, page_size)
+    return SearchResponse(
+        data=result["results"],
+        meta={"page": page, "page_size": page_size, "total": result["total"]},
+    )
 
 
 @router.get(
@@ -113,7 +166,8 @@ async def search_documentos_suggest(
     q: str = Query(..., min_length=2, description="Prefixo para sugestão (mín. 2 caracteres)", examples=["edi"]),
     size: int = Query(5, ge=1, le=20, description="Número de sugestões", examples=[5]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    suggestions = await _svc().suggest(_INDEX(), q, size)
+    return APIResponse(data=suggestions)
 
 
 @router.get(
@@ -129,4 +183,8 @@ async def search_documentos_chunks(
     page_size: int = Query(20, ge=1, le=100, description="Itens por página", examples=[20]),
     document_id: Optional[str] = Query(None, description="Filtrar chunks de um documento específico", examples=["abc123"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    result = await _chunks_svc().search(_CHUNKS(), q, page, page_size, document_id)
+    return SearchResponse(
+        data=result["results"],
+        meta={"page": page, "page_size": page_size, "total": result["total"], "query": q},
+    )

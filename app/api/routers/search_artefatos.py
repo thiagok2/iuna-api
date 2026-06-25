@@ -4,16 +4,31 @@ Search routes for artefatos.
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, Path, Query
 
 from app.api.dependencies import verify_token
 from app.api.models.responses import APIResponse, SearchResponse
+from app.clients.es_client import es_client
+from app.config import settings
+from app.services.artefatos_search import ArtefatosSearchService
+from app.services.chunks_search import ChunksSearchService
 
 router = APIRouter(
     prefix="/artefatos/search",
     tags=["artefatos - search"],
     dependencies=[Depends(verify_token)],
 )
+
+_INDEX = lambda: settings.index_artefatos  # noqa: E731
+_CHUNKS = lambda: settings.index_artefatos_chunks  # noqa: E731
+
+
+def _svc() -> ArtefatosSearchService:
+    return ArtefatosSearchService(es_client)
+
+
+def _chunks_svc() -> ChunksSearchService:
+    return ChunksSearchService(es_client)
 
 
 @router.get(
@@ -33,8 +48,24 @@ async def search_artefatos(
     autor: Optional[str] = Query(None, description="Filtro por autor", examples=["Prof. João"]),
     ano: Optional[int] = Query(None, description="Filtro por ano", examples=[2024]),
     publico: Optional[bool] = Query(None, description="Filtro público/privado"),
+    exact_phrase: bool = Query(False, description="Busca por frase exata (match_phrase)"),
+    with_aggregations: bool = Query(
+        False,
+        description="Incluir agregações (tipo, disciplina) junto com os resultados.",
+    ),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    filters: dict = {
+        "artefato.tipo": tipo,
+        "artefato.disciplina.keyword": disciplina,
+    }
+    result = await _svc().search_fulltext(
+        _INDEX(), q, page, page_size, filters, exact_phrase, with_aggregations
+    )
+    return SearchResponse(
+        data=result["results"],
+        meta={"page": page, "page_size": page_size, "total": result["total"], "query": q},
+        facets=result.get("aggregations"),
+    )
 
 
 @router.get(
@@ -48,7 +79,11 @@ async def search_artefatos_similar(
     artefato_id: str = Path(..., description="ID do artefato de referência", examples=["art-456"]),
     page_size: int = Query(10, ge=1, le=50, description="Quantidade de resultados", examples=[10]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    result = await _svc().search_similar(_INDEX(), artefato_id, page_size)
+    return SearchResponse(
+        data=result["results"],
+        meta={"total": result["total"]},
+    )
 
 
 @router.get(
@@ -63,7 +98,11 @@ async def search_artefatos_by_entity(
     page: int = Query(1, ge=1, description="Página", examples=[1]),
     page_size: int = Query(20, ge=1, le=100, description="Itens por página", examples=[20]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    result = await _svc().search_by_entity(_INDEX(), entity, entity_type, page, page_size)
+    return SearchResponse(
+        data=result["results"],
+        meta={"page": page, "page_size": page_size, "total": result["total"]},
+    )
 
 
 @router.get(
@@ -77,7 +116,11 @@ async def search_artefatos_by_keyword(
     page: int = Query(1, ge=1, description="Página", examples=[1]),
     page_size: int = Query(20, ge=1, le=100, description="Itens por página", examples=[20]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    result = await _svc().search_by_keyword(_INDEX(), keyword, page, page_size)
+    return SearchResponse(
+        data=result["results"],
+        meta={"page": page, "page_size": page_size, "total": result["total"]},
+    )
 
 
 @router.get(
@@ -90,7 +133,8 @@ async def search_artefatos_suggest(
     q: str = Query(..., min_length=2, description="Prefixo para sugestão (mín. 2 caracteres)", examples=["prog"]),
     size: int = Query(5, ge=1, le=20, description="Número de sugestões", examples=[5]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    suggestions = await _svc().suggest(_INDEX(), q, size)
+    return APIResponse(data=suggestions)
 
 
 @router.get(
@@ -106,4 +150,8 @@ async def search_artefatos_chunks(
     page_size: int = Query(20, ge=1, le=100, description="Itens por página", examples=[20]),
     artefato_id: Optional[str] = Query(None, description="Filtrar chunks de um artefato específico", examples=["art-456"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    result = await _chunks_svc().search(_CHUNKS(), q, page, page_size, artefato_id)
+    return SearchResponse(
+        data=result["results"],
+        meta={"page": page, "page_size": page_size, "total": result["total"], "query": q},
+    )
