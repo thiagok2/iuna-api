@@ -14,6 +14,7 @@ from app.api.routers.health import router as health_router
 from app.api.routers.scoring import router as scoring_router
 from app.api.routers.search_artefatos import router as search_artefatos_router
 from app.api.routers.search_documentos import router as search_documentos_router
+from app.api.routers.search_legado import router as search_legado_router
 from app.api.routers.stats import router as stats_router
 from app.clients.es_client import es_client
 from app.config import settings
@@ -114,6 +115,7 @@ app.include_router(health_router, prefix=settings.API_V1_STR)
 # Search routers (registered BEFORE CRUD to avoid path param conflicts)
 app.include_router(search_documentos_router, prefix=settings.API_V1_STR)
 app.include_router(search_artefatos_router, prefix=settings.API_V1_STR)
+app.include_router(search_legado_router, prefix=settings.API_V1_STR)
 
 # Entities/keywords listing (registered before CRUD for same reason)
 app.include_router(entities_listing_router, prefix=settings.API_V1_STR)
