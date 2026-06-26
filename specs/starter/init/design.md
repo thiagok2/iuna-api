@@ -2256,9 +2256,10 @@ A desvantagem é que o índice `chat_sessions` acumula documentos expirados. Par
 
 class ChatService:
     def __init__(self, es_client: ESClient, llm_provider: BaseLLMProvider,
-                 rasa_client: RasaClient):
+                 embedding_provider: BaseLLMProvider, rasa_client: RasaClient):
         self.es = es_client
-        self.llm = llm_provider
+        self.llm = llm_provider          # geração de texto (Gemini / futuro Ollama)
+        self.embed = embedding_provider  # embeddings — sempre Gemini (não misturar modelo)
         self.rasa = rasa_client
         self.sessions_index = settings.index_chat_sessions
         self.chunks_indices = [
@@ -2444,7 +2445,7 @@ class ChatService:
         Busca híbrida usando RRF nativo do ES 8.9+ (única chamada).
         Combina BM25 (match) + kNN (embedding_vector) com Reciprocal Rank Fusion.
         """
-        query_vector = await self.llm.generate_embedding(query)
+        query_vector = await self.embed.generate_embedding(query)  # sempre embedding_provider
         doc_filter = {"term": {"parent_document_id": document_id}} if document_id else None
 
         query_clause = (

@@ -434,6 +434,9 @@
 ### T-21: ChatService + Router
 
 - [ ] Criar `app/services/chat.py` conforme design seção 13:
+  - `__init__(es_client, llm_provider, embedding_provider, rasa_client)`:
+    - `self.llm` → geração de resposta (Gemini agora, Ollama no futuro)
+    - `self.embed` → embeddings de query — **sempre `embedding_provider` (Gemini); não usar `self.llm`**
   - `handle_message(message, session_id, source_type=None)`:
     - Lê sessão do ES (verifica `expires_at > now`)
     - Classifica via Rasa (fallback `ask_about_document`)
@@ -441,16 +444,21 @@
     - Para cada doc com chunks → `_hybrid_search` (RRF nativo, 1 chamada ES)
     - Para cada doc sem chunks → `attachment.content` completo
     - Sem contexto específico → busca livre nos chunks (filtrado por source_type)
-    - Gera resposta via LLM
+    - Gera resposta via `self.llm.generate_response()`
     - Persiste mensagens + renova `expires_at` (scripted update)
   - `_get_or_create_session(session_id)`:
     - Retorna sessão válida ou cria nova com `expires_at = now + CHAT_SESSION_TTL_HOURS`
   - `_hybrid_search(query, indices, document_id=None)`:
-    - Gera embedding da query
+    - Gera embedding da query via `self.embed.generate_embedding()` (embedding_provider)
     - Uma única query ES com `rank: {rrf: {window_size: 10}}`
     - Retorna `result["hits"]["hits"]` diretamente (sem merge manual)
-  - `add_document_to_context(session_id, document_id)` → append em `context_document_ids` (sem duplicar)
-  - `add_artefato_to_context(session_id, artefato_id)` → append em `context_artefato_ids` (sem duplicar)
+    - Nota: RRF+kNN requer licença ES Platinum/Enterprise — em Basic, opera só com BM25 (comportamento aceitável)
+  - `add_document_to_context(session_id, document_id)`:
+    - Append em `context_document_ids` (sem duplicar)
+    - Incrementa `popularity_score` do doc com `add_to_chat` (+3) via `ScoringService`
+  - `add_artefato_to_context(session_id, artefato_id)`:
+    - Append em `context_artefato_ids` (sem duplicar)
+    - Incrementa `popularity_score` do artefato com `add_to_chat` (+3) via `ScoringService`
   - `clear_context(session_id)` → zera ambas as listas
 - [ ] Substituir stubs em `app/api/routers/chat.py`:
   - `POST /chat/message` — body: `{message, session_id, source_type?}` (sem `document_ids`)
@@ -461,12 +469,53 @@
   - `POST /chat/sessions/{session_id}/add-artefato` — body: `{artefato_id}`; valida que artefato existe; 404 se não
   - `DELETE /chat/sessions/{session_id}/context`
 - [ ] **Validar**:
-  1. Sem contexto: `POST /chat/message {message: "o que é um edital?", session_id: "s1"}` → busca livre nos chunks, resposta do LLM
-  2. Com contexto: `POST /chat/sessions/s1/add-documento {document_id: "<id_enriquecido>"}` → 200 com context_document_ids preenchido
-  3. `POST /chat/message {message: "qual o prazo?", session_id: "s1"}` → busca só nos chunks do doc adicionado → resposta fundamentada
-  4. `DELETE /chat/sessions/s1/context` → context_document_ids=[]
-  5. TTL: criar sessão com `CHAT_SESSION_TTL_HOURS=0` (no .env de teste) → próxima mensagem recria sessão vazia
-  6. Chitchat: `POST /chat/message {message: "bom dia!", session_id: "s2"}` → Rasa retorna `chitchat` → resposta sem busca no ES
+  1. Sem contexto — busca livre nos chunks:
+     ```bash
+     curl -s -X POST -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+       -H "Content-Type: application/json" \
+       -d '{"message": "o que é um edital?", "session_id": "test-session-001"}' \
+       http://localhost:8000/api/v1/chat/message | python3 -m json.tool
+     ```
+     Resposta deve ter `intent: "ask_about_document"`, `context_used: false`, `response` com conteúdo.
+  2. Adicionar documento ao contexto (Manual de Auditoria — tem entities+keywords+embedding):
+     ```bash
+     curl -s -X POST -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+       -H "Content-Type: application/json" \
+       -d '{"document_id": "TjcA7psBL-x_8ArHDqI6"}' \
+       http://localhost:8000/api/v1/chat/sessions/test-session-001/add-documento | python3 -m json.tool
+     ```
+     Resposta deve ter `context_document_ids: ["TjcA7psBL-x_8ArHDqI6"]`.
+  3. Mensagem com contexto — deve usar chunks ou attachment.content do doc:
+     ```bash
+     curl -s -X POST -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+       -H "Content-Type: application/json" \
+       -d '{"message": "quais são as responsabilidades do auditor?", "session_id": "test-session-001"}' \
+       http://localhost:8000/api/v1/chat/message | python3 -m json.tool
+     ```
+     Resposta deve ter `context_used: true`, `context_document_ids: ["TjcA7psBL-x_8ArHDqI6"]`.
+  4. Limpar contexto:
+     ```bash
+     curl -s -X DELETE -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+       http://localhost:8000/api/v1/chat/sessions/test-session-001/context | python3 -m json.tool
+     ```
+     Resposta deve ter `context_document_ids: []`.
+  5. TTL: setar `CHAT_SESSION_TTL_HOURS=0` no `.env` → reiniciar API → enviar mensagem em nova session → próxima mensagem recria sessão vazia (histórico limpo).
+  6. Chitchat:
+     ```bash
+     curl -s -X POST -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+       -H "Content-Type: application/json" \
+       -d '{"message": "bom dia, tudo bem?", "session_id": "test-session-002"}' \
+       http://localhost:8000/api/v1/chat/message | python3 -m json.tool
+     ```
+     Resposta deve ter `intent: "chitchat"`, `context_used: false`.
+  7. ID inexistente → 404:
+     ```bash
+     curl -s -o /dev/null -w "%{http_code}" \
+       -X POST -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+       -H "Content-Type: application/json" \
+       -d '{"document_id": "id-fantasma"}' \
+       http://localhost:8000/api/v1/chat/sessions/test-session-001/add-documento
+     ```
 
 ---
 
