@@ -21,3 +21,14 @@ class BaseLLMProvider(ABC):
 
     @abstractmethod
     async def health_check(self) -> bool: ...
+
+    async def enrich_document_combined(self, text: str) -> dict:
+        """Retorna resumo + entidades + keywords em uma estrutura unificada.
+
+        Implementação padrão faz 3 chamadas individuais. Providers podem sobrescrever
+        para consolidar em uma única requisição e reduzir custo de tokens de entrada.
+        """
+        summary = await self.generate_summary(text)
+        entities = await self.extract_entities(text)
+        keywords = await self.extract_keywords(text)
+        return {"resumo": summary, "entidades": entities, "keywords": keywords}

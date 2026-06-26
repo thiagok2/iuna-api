@@ -18,6 +18,8 @@ class Settings(BaseSettings):
 
     # LLM provider selection — valores aceitos: gemini | claude | ollama
     ACTIVE_LLM_PROVIDER: str = "gemini"
+    # Provedor de embeddings (pode ser diferente do LLM de geração)
+    ACTIVE_EMBEDDING_PROVIDER: str = "gemini"
     GEMINI_API_KEY: Optional[str] = None
     GEMINI_TEXT_MODEL: str = "gemini-2.0-flash"
     GEMINI_EMBED_MODEL: str = "gemini-embedding-001"

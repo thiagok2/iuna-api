@@ -4,7 +4,8 @@ Search routes for documentos.
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Path
+from elasticsearch import NotFoundError as ESNotFoundError
+from fastapi import APIRouter, Depends, HTTPException, Query, Path
 
 from app.api.dependencies import verify_token
 from app.api.models.responses import APIResponse, SearchResponse
@@ -101,20 +102,23 @@ async def search_documentos_facets(
 
 
 @router.get(
-    "/similar/{document_id}",
-    summary="Documentos similares (More Like This)",
-    description="Encontra documentos similares ao documento informado usando More Like This do Elasticsearch "
-    "ou busca vetorial por similaridade de embeddings.",
+    "/related/{document_id}",
+    summary="Documentos relacionados (RRF multi-sinal)",
+    description="Combina MLT, entidades, keywords e embedding (quando disponível) via RRF para retornar "
+    "documentos semanticamente relacionados. `enrichment_used` indica quais sinais foram aplicados.",
     response_model=SearchResponse,
 )
-async def search_documentos_similar(
+async def search_documentos_related(
     document_id: str = Path(..., description="ID do documento de referência", examples=["abc123"]),
-    page_size: int = Query(10, ge=1, le=50, description="Quantidade de resultados", examples=[10]),
+    limit: int = Query(10, ge=1, le=50, description="Quantidade de resultados", examples=[10]),
 ):
-    result = await _svc().search_similar(_INDEX(), document_id, page_size)
+    try:
+        result = await _svc().search_related(_INDEX(), document_id, limit)
+    except ESNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Documento não encontrado: {document_id}")
     return SearchResponse(
         data=result["results"],
-        meta={"total": result["total"]},
+        meta={"total": result["total"], "enrichment_used": result["enrichment_used"]},
     )
 
 

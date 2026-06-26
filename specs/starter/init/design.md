@@ -277,14 +277,14 @@ settings = Settings()
 | | **Busca — Documentos** | | |
 | 13 | GET | `/documentos/search` | Full-text + filtros |
 | 14 | GET | `/documentos/search/facets` | Agregações/facetas |
-| 15 | GET | `/documentos/search/similar/{document_id}` | Semelhantes (kNN) |
+| 15 | GET | `/documentos/search/related/{document_id}` | Relacionados (kNN + entidades + keywords + MLT com RRF) |
 | 16 | GET | `/documentos/search/by-entity` | Busca por entidade |
 | 17 | GET | `/documentos/search/by-keyword` | Busca por keyword |
 | 18 | GET | `/documentos/search/suggest` | Autocomplete |
 | 19 | GET | `/documentos/search/chunks` | Busca em chunks de documentos |
 | | **Busca — Artefatos** | | |
 | 20 | GET | `/artefatos/search` | Full-text + filtros |
-| 21 | GET | `/artefatos/search/similar/{artefato_id}` | Semelhantes (kNN) |
+| 21 | GET | `/artefatos/search/related/{artefato_id}` | Relacionados (kNN + entidades + keywords + MLT com RRF) |
 | 22 | GET | `/artefatos/search/by-entity` | Busca por entidade |
 | 23 | GET | `/artefatos/search/by-keyword` | Busca por keyword |
 | 24_s | GET | `/artefatos/search/suggest` | Autocomplete |
@@ -443,10 +443,41 @@ Response 200:
 { "success": true, "data": { "facets": { "tipo_doc": [...], "orgao": [...], "ano": [...] } } }
 ```
 
-#### `GET /api/v1/documentos/search/similar/{document_id}`
+#### `GET /api/v1/documentos/search/related/{document_id}`
 ```
 Query Params: limit (default 10)
-Response 200: { "success": true, "data": { "results": [...] } }
+
+Retorna documentos relacionados ao documento indicado, combinando todos os sinais
+de enriquecimento disponíveis com RRF nativo (ES 8.9+):
+  - kNN sobre ato.embedding_vector     (similaridade semântica)
+  - nested match sobre ato.entidades   (entidades nomeadas em comum)
+  - terms boost sobre ato.keywords     (keywords em comum)
+  - more_like_this sobre ato.ementa + attachment.content (similaridade textual)
+
+Fallback progressivo conforme enriquecimento disponível:
+  - Enriquecimento completo → kNN + entidades + keywords + MLT
+  - Só embedding            → kNN + MLT
+  - Só entidades/keywords   → entidades + keywords + MLT
+  - Sem enriquecimento      → MLT puro
+
+O próprio documento é excluído dos resultados.
+
+Response 200:
+{
+  "success": true,
+  "data": {
+    "results": [
+      {
+        "_id": "...",
+        "_score": 0.87,
+        "_source": { "ato": { "titulo": "...", "tipo_doc": "...", "ano": 2024, ... } },
+        "signals": ["knn", "entities", "keywords"]
+      }
+    ],
+    "enrichment_used": ["embedding", "entities", "keywords"],
+    "total": 10
+  }
+}
 ```
 
 #### `GET /api/v1/documentos/search/by-entity`
@@ -477,7 +508,21 @@ Query Params: q, page, page_size, tipo, uploaded_by, data_inicio, data_fim
 Response 200: (mesma estrutura, campos de artefato)
 ```
 
-#### `GET /api/v1/artefatos/search/similar/{artefato_id}`
+#### `GET /api/v1/artefatos/search/related/{artefato_id}`
+```
+Query Params: limit (default 10)
+
+Mesma lógica de search_related de documentos, adaptada para artefatos:
+  - kNN sobre artefato.embedding_vector
+  - nested match sobre artefato.entidades
+  - terms boost sobre artefato.keywords
+  - more_like_this sobre artefato.titulo + attachment.content
+
+Mesmo fallback progressivo e exclusão do próprio artefato.
+
+Response 200: mesma estrutura de /documentos/search/related/{id}, com campos de artefato.
+```
+
 #### `GET /api/v1/artefatos/search/by-entity`
 #### `GET /api/v1/artefatos/search/suggest`
 #### `GET /api/v1/artefatos/search/chunks`
@@ -589,9 +634,13 @@ Request Body:
 {
   "message": "string" (obrigatório),
   "session_id": "string" (obrigatório),
-  "document_ids": ["string"] (opcional),
   "source_type": "documentos" | "artefatos" (opcional, default: busca em ambos)
 }
+
+Nota: os documentos do contexto NÃO são passados aqui. Eles ficam persistidos na sessão
+(context_document_ids / context_artefato_ids) e são adicionados via add-documento/add-artefato.
+O parâmetro source_type serve apenas para restringir o índice de chunks quando a sessão
+não tem documentos específicos no contexto.
 
 Response 200:
 {
@@ -600,7 +649,9 @@ Response 200:
     "response": "Resposta fundamentada nos documentos...",
     "intent": "ask_about_document",
     "session_id": "uuid",
-    "context_used": true
+    "context_used": true,
+    "context_document_ids": ["abc123"],
+    "context_artefato_ids": []
   }
 }
 ```
@@ -616,10 +667,16 @@ Response 200:
       { "role": "user", "content": "...", "timestamp": "..." },
       { "role": "assistant", "content": "...", "timestamp": "..." }
     ],
+    "context_document_ids": ["abc123"],
+    "context_artefato_ids": [],
     "created_at": "...",
-    "last_activity_at": "..."
+    "last_activity_at": "...",
+    "expires_at": "..."
   }
 }
+```
+
+Retorna 404 se sessão não existe ou já expirou (`expires_at < now`).
 ```
 
 #### `GET /api/v1/chat/sessions`
@@ -640,11 +697,23 @@ Response 200:
 Request Body:
 { "document_id": "string" }
 
-Adiciona um documento ao contexto da sessão. As próximas mensagens
-do chat buscarão chunks/conteúdo deste documento para montar contexto.
+Adiciona o document_id à lista context_document_ids da sessão (sem duplicar).
+A partir desta chamada, todas as mensagens da sessão buscarão contexto apenas
+nos chunks deste documento (e dos demais já adicionados). Se o documento não
+tiver chunks, o ChatService usa o attachment.content completo como fallback.
+
+Retorna 404 se o document_id não existe no índice documentos_ifal_v2.
+Retorna 404 se a sessão não existe ou expirou.
 
 Response 200:
-{ "success": true, "data": { "session_id": "...", "context_documents": ["id1", "id2"] } }
+{
+  "success": true,
+  "data": {
+    "session_id": "...",
+    "context_document_ids": ["id1", "id2"],
+    "context_artefato_ids": []
+  }
+}
 ```
 
 #### `POST /api/v1/chat/sessions/{session_id}/add-artefato`
@@ -652,18 +721,37 @@ Response 200:
 Request Body:
 { "artefato_id": "string" }
 
-Adiciona um artefato ao contexto da sessão.
+Adiciona o artefato_id à lista context_artefato_ids da sessão (sem duplicar).
+Mesma semântica de add-documento, mas para o índice artefatos.
+
+Retorna 404 se o artefato_id não existe no índice artefatos.
+Retorna 404 se a sessão não existe ou expirou.
 
 Response 200:
-{ "success": true, "data": { "session_id": "...", "context_artefatos": ["id1"] } }
+{
+  "success": true,
+  "data": {
+    "session_id": "...",
+    "context_document_ids": [],
+    "context_artefato_ids": ["xyz456"]
+  }
+}
 ```
 
 #### `DELETE /api/v1/chat/sessions/{session_id}/context`
 ```
-Remove todos os documentos/artefatos do contexto da sessão (limpa referências).
+Limpa context_document_ids=[] e context_artefato_ids=[] da sessão.
+As próximas mensagens voltam a buscar em todos os chunks (sem restrição por doc).
 
 Response 200:
-{ "success": true, "data": { "context_documents": [], "context_artefatos": [] } }
+{
+  "success": true,
+  "data": {
+    "session_id": "...",
+    "context_document_ids": [],
+    "context_artefato_ids": []
+  }
+}
 ```
 
 ---
@@ -808,6 +896,23 @@ Response 200: (mesma estrutura para artefatos)
 ---
 
 ### 3.5.8 Scoring / Relevância por Uso
+
+> **Conceito**: documentos frequentemente acessados provavelmente são mais relevantes para futuras buscas. O `popularity_score` captura esse sinal implícito de uso — sem exigir que ninguém avalie ou etiquete documentos manualmente.
+
+#### Por que `log1p` e não boost linear?
+
+Sem moderação, documentos antigos e populares dominariam os resultados para sempre — um edital de 2015 muito acessado apareceria antes de uma resolução recente de 2024 mesmo que a busca seja sobre 2024.
+
+A função `log1p(x)` cresce rapidamente no início e vai desacelerando:
+
+```
+score=0    → log1p(0)   = 0.00
+score=10   → log1p(10)  = 2.40
+score=100  → log1p(100) = 4.61
+score=1000 → log1p(1000)= 6.91
+```
+
+Um documento com 1.000 interações recebe boost ~3× maior que um com 10 — não 100×. Isso garante que a popularidade influencia sem monopolizar. O `factor: 0.5` na `field_value_factor` reduz ainda mais o impacto, tornando o boost suave por padrão.
 
 Documentos que são clicados em resultados de busca ou adicionados ao contexto de conversas ganham score. Esse score eleva a posição do documento em buscas futuras.
 
@@ -1028,11 +1133,22 @@ Metadados mínimos sob `artefato.*`. Tudo o mais é inferido por IA:
 {
   "session_id": "keyword",
   "client_id": "keyword",
-  "messages": "nested { role, content, timestamp }",
+  "messages": "nested { role: keyword, content: text, timestamp: date }",
+  "context_document_ids": "keyword[]",
+  "context_artefato_ids": "keyword[]",
   "created_at": "date",
-  "last_activity_at": "date"
+  "last_activity_at": "date",
+  "expires_at": "date"
 }
 ```
+
+**TTL**: ao criar a sessão, `expires_at = now + CHAT_SESSION_TTL_HOURS`. Ao buscar a sessão,
+filtrar `expires_at > now`. Ao receber mensagem em sessão válida, renovar
+`last_activity_at = now` e `expires_at = now + CHAT_SESSION_TTL_HOURS`.
+
+**Contexto de documentos**: `context_document_ids` e `context_artefato_ids` persistem os IDs
+adicionados via `add-documento`/`add-artefato`. O `ChatService` lê esses campos a cada
+`handle_message` para decidir onde buscar contexto — não recebe IDs no request.
 
 ### 4.5 Regra de Enriquecimento
 
@@ -1110,6 +1226,95 @@ def build_range_filter(field: str, gte=None, lte=None) -> dict:
 ```
 
 Os search services chamam essas funções diretamente. Simples. Sem mágica.
+
+---
+
+## 5.5 Estratégias de Busca por Similaridade: kNN, MLT e RRF
+
+Os métodos `search_related` (seções 6 e 7) combinam três estratégias complementares. Cada uma captura um aspecto diferente da "relevância".
+
+### kNN — k-Nearest Neighbors (similaridade semântica)
+
+Cada documento possui um campo `embedding_vector` — uma lista de ~768 números gerada pelo modelo de embedding. O texto embedado depende do estado de enriquecimento do documento:
+
+| Estado | Texto embedado | `embedding_source` |
+|--------|---------------|-------------------|
+| Resumo existe | `{root}.resumo` | `"resumo"` |
+| Sem resumo | Primeiros 5000 chars de `attachment.content` | `"inicio_documento"` |
+
+O campo `embedding_source` é gravado junto com `embedding_vector` e permite identificar documentos com vetor parcial (início do documento) para re-embedar quando o resumo estiver disponível. Não gera resumo automaticamente — as operações são independentes.
+
+Na query ES:
+```json
+"knn": {
+  "field": "ato.embedding_vector",
+  "query_vector": [...],   ← embedding da query/doc de referência
+  "k": 10,
+  "num_candidates": 100
+}
+```
+
+**Forte em**: significados parecidos com vocabulário diferente (ex: "edital" ≈ "chamamento público").  
+**Fraco em**: termos exatos, nomes próprios, siglas.  
+**Pré-requisito**: documento precisa ter `embedding_vector`. Vetores gerados de `"resumo"` tendem a ter maior qualidade semântica que os de `"inicio_documento"`.
+
+---
+
+### MLT — More Like This (similaridade textual)
+
+O ES analisa as palavras mais características de um documento de referência (via TF-IDF) e monta uma query automática para encontrar documentos com vocabulário parecido.
+
+Na query ES:
+```json
+"more_like_this": {
+  "fields": ["ato.ementa", "ato.titulo", "attachment.content"],
+  "like": [{"_index": "documentos_ifal_v2", "_id": "<doc_id>"}],
+  "min_term_freq": 1,
+  "max_query_terms": 25
+}
+```
+
+**Forte em**: documentos com terminologia idêntica.  
+**Fraco em**: sinônimos ou variações de vocabulário.  
+**Vantagem**: funciona mesmo sem enriquecimento — usa o texto bruto do documento.
+
+---
+
+### RRF — Reciprocal Rank Fusion (fusão de rankings)
+
+Problema: kNN retorna uma lista ranqueada, MLT retorna outra, entidades retornam uma terceira. Como combinar as três em uma única lista?
+
+O RRF resolve com uma fórmula de pontuação por posição: cada documento recebe `1 / (k + posição)` em cada lista (k=60 por padrão), e as pontuações são somadas. Um documento que aparece bem colocado em múltiplas listas sobe ao topo — mesmo sem ser o 1º em nenhuma.
+
+```
+Doc A: 2º no kNN  → 1/(60+2) ≈ 0.016
+       1º no MLT  → 1/(60+1) ≈ 0.016
+       Total ≈ 0.032  ← sobe ao topo
+
+Doc B: 1º no kNN  → 1/(60+1) ≈ 0.016
+       10º no MLT → 1/(60+10) ≈ 0.014
+       Total ≈ 0.030
+```
+
+No ES 8.9+, RRF é nativo — basta adicionar `"rank": {"rrf": {"window_size": N}}` à query que já tem `"query"` e `"knn"`. O ES faz a fusão internamente em uma única chamada.
+
+**Forte em**: robustez — um sinal compensa a fraqueza do outro.  
+**Requer**: ES 8.9+ (projeto usa 8.12+).
+
+---
+
+### Fallback progressivo em `search_related`
+
+O `search_related` usa os sinais disponíveis conforme o estado de enriquecimento do documento:
+
+| Enriquecimento | Sinais usados | Observação |
+|---------------|--------------|------------|
+| Completo | kNN + entidades + keywords + MLT (com RRF) | Melhor qualidade |
+| Só embedding | kNN + MLT (com RRF) | Sem sobreposição semântica de entidades |
+| Só entidades/keywords | entidades + keywords + MLT (sem RRF) | Sem kNN, query bool normal |
+| Sem enriquecimento | MLT puro | Fallback mínimo, sempre disponível |
+
+A resposta inclui `enrichment_used` para rastreabilidade (ex: `["embedding", "entities", "keywords"]`).
 
 ---
 
@@ -1205,32 +1410,89 @@ class DocumentosSearchService:
             ], "minimum_should_match": 1}}
         return await self.es.search(index=self.index, body=body)
 
-    async def search_similar(self, document_id: str, limit: int = 10) -> dict:
-        """Busca documentos similares por kNN. Fallback: more_like_this."""
-        doc = await self.es.get(index=self.index, id=document_id)
-        vector = doc.get("_source", {}).get("ato", {}).get("embedding_vector")
+    async def search_related(self, document_id: str, limit: int = 10) -> dict:
+        """
+        Busca documentos relacionados usando todos os sinais de enriquecimento disponíveis.
 
-        if vector:
-            body = {
-                "knn": {
-                    "field": "ato.embedding_vector",
-                    "query_vector": vector,
-                    "k": limit,
-                    "num_candidates": limit * 10
+        Combina via RRF nativo (ES 8.9+):
+          - kNN semântico (embedding_vector)
+          - overlap de entidades nomeadas (nested match)
+          - overlap de keywords (terms boost)
+          - more_like_this sobre ementa + content (fallback textual)
+
+        Fallback progressivo: usa os sinais disponíveis conforme enriquecimento do doc.
+        O próprio documento é sempre excluído dos resultados.
+        """
+        doc = await self.es.get(index=self.index, id=document_id)
+        source = doc["_source"].get("ato", {})
+        vector    = source.get("embedding_vector")
+        entities  = [e["texto"] for e in source.get("entidades", [])]
+        keywords  = source.get("keywords", [])
+
+        enrichment_used = []
+        should_clauses = []
+
+        # MLT sempre presente como base textual
+        mlt_clause = {
+            "more_like_this": {
+                "fields": ["ato.ementa", "ato.titulo", "attachment.content"],
+                "like": [{"_index": self.index, "_id": document_id}],
+                "min_term_freq": 1,
+                "max_query_terms": 25,
+                "boost": 0.5,
+            }
+        }
+        should_clauses.append(mlt_clause)
+
+        # Entidades (nested match com boost)
+        if entities:
+            enrichment_used.append("entities")
+            should_clauses.append({
+                "nested": {
+                    "path": "ato.entidades",
+                    "query": {"terms": {"ato.entidades.texto": entities}},
+                    "boost": 1.5,
                 }
+            })
+
+        # Keywords (terms boost)
+        if keywords:
+            enrichment_used.append("keywords")
+            should_clauses.append({
+                "terms": {"ato.keywords": keywords, "boost": 1.2}
+            })
+
+        body = {
+            "query": {
+                "bool": {
+                    "should": should_clauses,
+                    "minimum_should_match": 1,
+                    "must_not": [{"term": {"_id": document_id}}],
+                }
+            },
+            "size": limit,
+        }
+
+        # kNN + RRF nativo quando embedding disponível
+        if vector:
+            enrichment_used.append("embedding")
+            body["knn"] = {
+                "field": "ato.embedding_vector",
+                "query_vector": vector,
+                "k": limit,
+                "num_candidates": limit * 10,
+                "filter": {"bool": {"must_not": [{"term": {"_id": document_id}}]}},
             }
-        else:
-            body = {
-                "query": {
-                    "more_like_this": {
-                        "fields": ["ato.ementa", "ato.titulo", "attachment.content"],
-                        "like": [{"_index": self.index, "_id": document_id}],
-                        "min_term_freq": 1, "max_query_terms": 25
-                    }
-                },
-                "size": limit
-            }
-        return await self.es.search(index=self.index, body=body)
+            body["rank"] = {"rrf": {"window_size": limit * 2}}
+
+        result = await self.es.search(index=self.index, body=body)
+
+        # Anota quais sinais estavam disponíveis na resposta
+        hits = result["hits"]["hits"]
+        for hit in hits:
+            hit["signals"] = enrichment_used
+
+        return {"hits": hits, "enrichment_used": enrichment_used, "total": len(hits)}
 
     async def search_by_entity(self, entity_text: str,
                                entity_category: str = None, limit: int = 20) -> dict:
@@ -1322,32 +1584,75 @@ class ArtefatosSearchService:
             ))
         return clauses
 
-    async def search_similar(self, artefato_id: str, limit: int = 10) -> dict:
-        """Busca artefatos similares por kNN. Fallback: more_like_this."""
+    async def search_related(self, artefato_id: str, limit: int = 10) -> dict:
+        """
+        Busca artefatos relacionados usando todos os sinais de enriquecimento disponíveis.
+        Mesma lógica de DocumentosSearchService.search_related, adaptada para artefatos.
+        """
         doc = await self.es.get(index=self.index, id=artefato_id)
-        vector = doc.get("_source", {}).get("artefato", {}).get("embedding_vector")
+        source = doc["_source"].get("artefato", {})
+        vector   = source.get("embedding_vector")
+        entities = [e["texto"] for e in source.get("entidades", [])]
+        keywords = source.get("keywords", [])
+
+        enrichment_used = []
+        should_clauses = []
+
+        # MLT base textual
+        should_clauses.append({
+            "more_like_this": {
+                "fields": ["artefato.titulo", "attachment.content"],
+                "like": [{"_index": self.index, "_id": artefato_id}],
+                "min_term_freq": 1,
+                "max_query_terms": 25,
+                "boost": 0.5,
+            }
+        })
+
+        if entities:
+            enrichment_used.append("entities")
+            should_clauses.append({
+                "nested": {
+                    "path": "artefato.entidades",
+                    "query": {"terms": {"artefato.entidades.texto": entities}},
+                    "boost": 1.5,
+                }
+            })
+
+        if keywords:
+            enrichment_used.append("keywords")
+            should_clauses.append({
+                "terms": {"artefato.keywords": keywords, "boost": 1.2}
+            })
+
+        body = {
+            "query": {
+                "bool": {
+                    "should": should_clauses,
+                    "minimum_should_match": 1,
+                    "must_not": [{"term": {"_id": artefato_id}}],
+                }
+            },
+            "size": limit,
+        }
 
         if vector:
-            body = {
-                "knn": {
-                    "field": "artefato.embedding_vector",
-                    "query_vector": vector,
-                    "k": limit,
-                    "num_candidates": limit * 10
-                }
+            enrichment_used.append("embedding")
+            body["knn"] = {
+                "field": "artefato.embedding_vector",
+                "query_vector": vector,
+                "k": limit,
+                "num_candidates": limit * 10,
+                "filter": {"bool": {"must_not": [{"term": {"_id": artefato_id}}]}},
             }
-        else:
-            body = {
-                "query": {
-                    "more_like_this": {
-                        "fields": ["artefato.titulo", "attachment.content"],
-                        "like": [{"_index": self.index, "_id": artefato_id}],
-                        "min_term_freq": 1, "max_query_terms": 25
-                    }
-                },
-                "size": limit
-            }
-        return await self.es.search(index=self.index, body=body)
+            body["rank"] = {"rrf": {"window_size": limit * 2}}
+
+        result = await self.es.search(index=self.index, body=body)
+        hits = result["hits"]["hits"]
+        for hit in hits:
+            hit["signals"] = enrichment_used
+
+        return {"hits": hits, "enrichment_used": enrichment_used, "total": len(hits)}
 
     async def search_by_entity(self, entity_text: str,
                                entity_category: str = None, limit: int = 20) -> dict:
@@ -1425,6 +1730,36 @@ class ChunksSearchService:
         else:
             return [settings.index_documentos_chunks, settings.index_artefatos_chunks]
 ```
+
+---
+
+## 8.5 Pipeline de Enriquecimento: Por Que Esta Ordem?
+
+O `enrich_all` executa as operações em uma sequência específica. A ordem importa porque algumas etapas dependem do resultado de etapas anteriores.
+
+```
+entidades → keywords → resumo → embedding → chunking
+```
+
+### Por que entidades e keywords primeiro?
+
+São derivadas diretamente do `attachment.content` (texto bruto do PDF) e **não dependem de nenhuma outra etapa**. Ao extrai-las cedo, elas ficam disponíveis imediatamente para buscas por `search_by_entity` e `search_related`, mesmo que o documento ainda não tenha resumo ou embedding.
+
+### Por que resumo antes do embedding?
+
+O embedding **é gerado a partir do resumo**, não do texto bruto. Resumos são semanticamente mais densos: removem ruído (cabeçalhos, rodapés, tabelas de formatação) e condensam o significado central. Um embedding de 768 dimensões gerado de 500 palavras de resumo representa o documento melhor do que o mesmo embedding gerado de 50.000 palavras de texto bruto — o sinal semântico se dilui com o tamanho.
+
+### Por que chunking por último?
+
+É a etapa mais cara: deleta chunks anteriores, segmenta o texto, gera um embedding por chunk (potencialmente dezenas de chamadas de API), e indexa em bulk. Se uma etapa anterior falhar, o chunking não foi desperdiçado.
+
+### Por que o threshold de 10.000 caracteres?
+
+Documentos pequenos (< 10k chars ≈ ~5 páginas) cabem inteiros no contexto do LLM. Chunkear um documento de 2 páginas em fragmentos de 3.000 chars produziria 1 chunk mal aproveitado. O threshold garante que chunking só acontece quando há texto suficiente para a segmentação ser útil.
+
+### Por que overlap de 500 chars entre chunks?
+
+Frases e parágrafos que ficam na fronteira entre dois chunks seriam perdidos em buscas se não houvesse sobreposição. O overlap de 500 chars (~2-3 parágrafos) garante que o contexto de cada chunk inclui o final do anterior, evitando cortes em meio a um raciocínio.
 
 ---
 
@@ -1849,6 +2184,71 @@ class ArtefatosCrudService:
 
 ---
 
+## 12.5 Arquitetura do Chat: RAG, Rasa e Sessões
+
+O `ChatService` implementa um padrão chamado **RAG (Retrieval-Augmented Generation)**. Entender o porquê dessa arquitetura justifica a maioria das decisões de implementação.
+
+### O problema que RAG resolve
+
+LLMs (como Gemini ou Claude) são treinados com conhecimento geral até uma data de corte — eles não conhecem os documentos específicos do IFAL. Se perguntarmos diretamente ao LLM sobre um edital interno, ele vai alucinar uma resposta plausível mas incorreta.
+
+RAG resolve isso em duas etapas:
+1. **Retrieve**: busca os trechos de documento mais relevantes para a pergunta
+2. **Generate**: envia esses trechos como contexto para o LLM, que responde baseado neles
+
+O LLM deixa de ser uma fonte de conhecimento e passa a ser um **motor de linguagem natural** que processa documentos reais.
+
+### Por que Rasa para classificação de intenção?
+
+A pergunta "por que não usar o próprio LLM para classificar a intenção?" é legítima. A razão é pragmática:
+
+| | Rasa | LLM |
+|-|------|-----|
+| Custo por classificação | Grátis (local) | ~0,001 tokens por req |
+| Latência | < 50ms | 500ms–2s |
+| Retreinamento | Sem custo (docker) | Impossível |
+| Isolamento | Independente da API | Depende da disponibilidade |
+
+Para um sistema que pode receber centenas de mensagens por dia, usar o LLM só para dizer "é chitchat ou pergunta sobre documento" seria desperdício de tokens e latência. Rasa classifica localmente e, se cair, o fallback é `ask_about_document` — o caminho mais seguro.
+
+### Busca híbrida nos chunks: diferença em relação ao `search_related`
+
+Embora ambos usem RRF, o objetivo é diferente:
+
+| | `search_related` | Chat `_hybrid_search` |
+|-|-----------------|----------------------|
+| Busca em | Documentos (índice pai) | Chunks (índice de fragmentos) |
+| Input | ID de um documento | Texto da mensagem do usuário |
+| Objetivo | Documentos com assunto parecido | Trechos relevantes para responder a pergunta |
+| kNN base | Embedding do documento | Embedding da mensagem |
+
+No chat, a granularidade é o **trecho** (chunk), não o documento inteiro. Um documento de 80 páginas pode ter 30 chunks, mas só 2 ou 3 são relevantes para uma pergunta específica. A busca híbrida (BM25 + kNN via RRF) garante que tanto a correspondência lexical ("cláusula 4.2") quanto a semântica ("quais são os prazos?") sejam consideradas.
+
+### Por que o `document_id` fica na sessão e não no request?
+
+```
+POST /chat/message         → NÃO recebe document_id
+POST /chat/sessions/{id}/add-documento → persiste document_id na sessão
+```
+
+Essa separação existe porque o contexto de uma conversa é **stateful** — o usuário diz uma vez "vamos falar sobre o edital X" e todas as mensagens seguintes devem usar esse contexto automaticamente. Se o `document_id` fosse passado em cada request:
+
+- O frontend precisaria manter o estado e reenviar em cada mensagem
+- Um erro no frontend (esquecer de enviar) quebraria o contexto silenciosamente
+- O chat não seria verdadeiramente conversacional — seria stateless
+
+### Design da sessão: `expires_at` em vez de ILM
+
+O Elasticsearch tem um recurso chamado **ILM (Index Lifecycle Management)** que pode deletar documentos automaticamente por idade. Optamos por não usá-lo por simplicidade: o campo `expires_at` no documento é suficiente.
+
+- **Expiração**: ao buscar a sessão, verificamos `expires_at > now`. Se expirada, recriamos.
+- **Renovação**: a cada mensagem, `expires_at = now + TTL`, mantendo sessões ativas vivas.
+- **Sem cron, sem infra extra**: nenhum processo externo necessário. Sessões expiradas ficam no índice até que o ES as compacte naturalmente, mas são ignoradas pela aplicação.
+
+A desvantagem é que o índice `chat_sessions` acumula documentos expirados. Para produção com alto volume, considerar uma rotina periódica de `delete_by_query` com filtro `expires_at < now`.
+
+---
+
 ## 13. ChatService
 
 ```python
@@ -1866,31 +2266,120 @@ class ChatService:
             settings.index_artefatos_chunks
         ]
 
-    async def handle_message(self, message: str, session_id: str,
-                             document_ids: list[str] = None,
-                             source_type: str = None) -> dict:
-        """Processa mensagem do chat."""
-        # 1. Classificar intenção via Rasa
+    async def handle_message(
+        self, message: str, session_id: str, source_type: str = None
+    ) -> dict:
+        """
+        Processa mensagem do chat.
+
+        Os IDs de documentos/artefatos do contexto NÃO vêm do request — são lidos
+        da sessão persistida (context_document_ids / context_artefato_ids).
+        source_type é um filtro de índice usado apenas quando a sessão não tem
+        documentos específicos no contexto.
+        """
+        # 1. Buscar ou criar sessão (verifica TTL)
+        session = await self._get_or_create_session(session_id)
+
+        # 2. Classificar intenção via Rasa (fallback: ask_about_document)
         intent = await self._classify_intent(message)
 
-        # 2. Recuperar histórico
-        history = await self._get_history(session_id)
-
         # 3. Decidir estratégia
+        history = session.get("messages", [])[-settings.CHAT_HISTORY_MAX_MESSAGES:]
         if intent == "chitchat":
             response = await self.llm.generate_response(
                 context="", question=message, history=history
             )
         else:  # ask_about_document (default)
-            context = await self._build_context(message, document_ids, source_type)
+            context = await self._build_context(message, session, source_type)
             response = await self.llm.generate_response(
                 context=context, question=message, history=history
             )
 
-        # 4. Salvar no histórico
-        await self._save_message(session_id, message, response)
+        # 4. Persistir mensagem + renovar TTL
+        await self._append_and_renew(session_id, message, response)
 
-        return {"response": response, "intent": intent, "session_id": session_id}
+        return {
+            "response": response,
+            "intent": intent,
+            "session_id": session_id,
+            "context_used": bool(
+                session.get("context_document_ids") or session.get("context_artefato_ids")
+            ),
+            "context_document_ids": session.get("context_document_ids", []),
+            "context_artefato_ids": session.get("context_artefato_ids", []),
+        }
+
+    async def _get_or_create_session(self, session_id: str) -> dict:
+        """
+        Retorna sessão existente e válida, ou cria nova.
+        Considera expirada se expires_at < now.
+        """
+        now = datetime.utcnow()
+        try:
+            doc = await self.es.get(index=self.sessions_index, id=session_id)
+            source = doc["_source"]
+            expires_at = datetime.fromisoformat(source["expires_at"])
+            if expires_at > now:
+                return source
+        except Exception:
+            pass
+
+        # Cria (ou recria se expirada)
+        expires_at = now + timedelta(hours=settings.CHAT_SESSION_TTL_HOURS)
+        session = {
+            "session_id": session_id,
+            "messages": [],
+            "context_document_ids": [],
+            "context_artefato_ids": [],
+            "created_at": now.isoformat(),
+            "last_activity_at": now.isoformat(),
+            "expires_at": expires_at.isoformat(),
+        }
+        await self.es.index(index=self.sessions_index, id=session_id, body=session)
+        return session
+
+    async def add_document_to_context(self, session_id: str, document_id: str) -> dict:
+        """Adiciona document_id a context_document_ids (sem duplicar)."""
+        session = await self._get_or_create_session(session_id)
+        ids = session.get("context_document_ids", [])
+        if document_id not in ids:
+            ids.append(document_id)
+        await self.es.update(
+            index=self.sessions_index,
+            id=session_id,
+            body={"doc": {"context_document_ids": ids}}
+        )
+        return {
+            "session_id": session_id,
+            "context_document_ids": ids,
+            "context_artefato_ids": session.get("context_artefato_ids", []),
+        }
+
+    async def add_artefato_to_context(self, session_id: str, artefato_id: str) -> dict:
+        """Adiciona artefato_id a context_artefato_ids (sem duplicar)."""
+        session = await self._get_or_create_session(session_id)
+        ids = session.get("context_artefato_ids", [])
+        if artefato_id not in ids:
+            ids.append(artefato_id)
+        await self.es.update(
+            index=self.sessions_index,
+            id=session_id,
+            body={"doc": {"context_artefato_ids": ids}}
+        )
+        return {
+            "session_id": session_id,
+            "context_document_ids": session.get("context_document_ids", []),
+            "context_artefato_ids": ids,
+        }
+
+    async def clear_context(self, session_id: str) -> dict:
+        """Zera context_document_ids e context_artefato_ids da sessão."""
+        await self.es.update(
+            index=self.sessions_index,
+            id=session_id,
+            body={"doc": {"context_document_ids": [], "context_artefato_ids": []}}
+        )
+        return {"session_id": session_id, "context_document_ids": [], "context_artefato_ids": []}
 
     async def _classify_intent(self, message: str) -> str:
         """Classifica via Rasa. Fallback: ask_about_document."""
@@ -1900,102 +2389,89 @@ class ChatService:
         except Exception:
             return "ask_about_document"
 
-    async def _build_context(self, message: str, document_ids: list[str] = None,
-                             source_type: str = None) -> str:
+    async def _build_context(self, message: str, session: dict, source_type: str = None) -> str:
         """
-        Monta contexto para o LLM.
-        - Se documento tem chunks → busca híbrida (BM25 + kNN com RRF)
-        - Se documento não tem chunks (< 10k chars) → usa attachment.content completo
-        """
-        if document_ids:
-            return await self._context_from_documents(message, document_ids, source_type)
+        Monta contexto para o LLM a partir da sessão.
 
-        # Sem documentos específicos → busca nos chunks de ambos os tipos
+        Prioridade:
+        1. Se sessão tem context_document_ids → busca nos chunks desses documentos
+        2. Se sessão tem context_artefato_ids → busca nos chunks desses artefatos
+        3. Sem contexto específico → busca em todos os chunks (filtrado por source_type)
+
+        Para cada doc/artefato: se tem chunks → busca híbrida RRF; se não tem → texto completo.
+        """
+        contexts = []
+
+        for doc_id in session.get("context_document_ids", []):
+            ctx = await self._context_for_doc(
+                message, doc_id, settings.index_documentos,
+                settings.index_documentos_chunks, "ato"
+            )
+            contexts.append(ctx)
+
+        for artefato_id in session.get("context_artefato_ids", []):
+            ctx = await self._context_for_doc(
+                message, artefato_id, settings.index_artefatos,
+                settings.index_artefatos_chunks, "artefato"
+            )
+            contexts.append(ctx)
+
+        if contexts:
+            return "\n\n---\n\n".join(contexts)
+
+        # Sem documentos específicos → busca livre nos chunks
         indices = self._resolve_chunks_indices(source_type)
         chunks = await self._hybrid_search(message, indices)
         return self._format_chunks_context(chunks)
 
-    async def _context_from_documents(self, message: str,
-                                      document_ids: list[str],
-                                      source_type: str) -> str:
-        """Busca contexto de documentos específicos."""
-        contexts = []
-        for doc_id in document_ids:
-            index, root = self._resolve_index_and_root(source_type)
-            doc = await self.es.get(index=index, id=doc_id)
-            source = doc["_source"]
+    async def _context_for_doc(
+        self, message: str, doc_id: str,
+        index: str, chunks_index: str, root: str
+    ) -> str:
+        """Contexto de um documento específico: chunks (RRF) ou texto completo."""
+        doc = await self.es.get(index=index, id=doc_id)
+        source = doc["_source"]
+        has_chunks = source.get(root, {}).get("total_chunks", 0) > 0
+        if has_chunks:
+            chunks = await self._hybrid_search(message, [chunks_index], doc_id)
+            return self._format_chunks_context(chunks)
+        return source.get("attachment", {}).get("content", "")
 
-            # Verifica se tem chunks
-            has_chunks = source.get(root, {}).get("total_chunks", 0) > 0
-            if has_chunks:
-                chunks_index = self._resolve_chunks_index(source_type)
-                chunks = await self._hybrid_search(message, [chunks_index], doc_id)
-                contexts.append(self._format_chunks_context(chunks))
-            else:
-                # Sem chunks → usa texto completo
-                content = source.get("attachment", {}).get("content", "")
-                contexts.append(content)
-
-        return "\n\n---\n\n".join(contexts)
-
-    async def _hybrid_search(self, query: str, indices: list[str],
-                             document_id: str = None) -> list[dict]:
-        """Busca híbrida: BM25 + kNN com RRF."""
-        # BM25
-        bm25_body = {"query": {"match": {"content": query}}, "size": 5}
-        if document_id:
-            bm25_body["query"] = {"bool": {
-                "must": [{"match": {"content": query}}],
-                "filter": [{"term": {"parent_document_id": document_id}}]
-            }}
-
-        # kNN
+    async def _hybrid_search(
+        self, query: str, indices: list[str], document_id: str = None
+    ) -> list[dict]:
+        """
+        Busca híbrida usando RRF nativo do ES 8.9+ (única chamada).
+        Combina BM25 (match) + kNN (embedding_vector) com Reciprocal Rank Fusion.
+        """
         query_vector = await self.llm.generate_embedding(query)
-        knn_body = {
-            "knn": {
-                "field": "embedding_vector",
-                "query_vector": query_vector,
-                "k": 5, "num_candidates": 50
-            }
-        }
-        if document_id:
-            knn_body["knn"]["filter"] = {"term": {"parent_document_id": document_id}}
+        doc_filter = {"term": {"parent_document_id": document_id}} if document_id else None
 
-        # Executa ambos e combina com RRF
-        index_str = ",".join(indices)
-        bm25_results = await self.es.search(index=index_str, body=bm25_body)
-        knn_results = await self.es.search(index=index_str, body=knn_body)
-
-        return self._rrf_merge(bm25_results, knn_results)
-
-    def _rrf_merge(self, bm25_results: dict, knn_results: dict, k: int = 60) -> list[dict]:
-        """Reciprocal Rank Fusion para combinar resultados."""
-        scores = {}
-        for rank, hit in enumerate(bm25_results["hits"]["hits"]):
-            scores[hit["_id"]] = scores.get(hit["_id"], 0) + 1 / (k + rank + 1)
-            scores[hit["_id"] + "_doc"] = hit
-
-        for rank, hit in enumerate(knn_results["hits"]["hits"]):
-            scores[hit["_id"]] = scores.get(hit["_id"], 0) + 1 / (k + rank + 1)
-            if hit["_id"] + "_doc" not in scores:
-                scores[hit["_id"] + "_doc"] = hit
-
-        # Ordena por score RRF e retorna top chunks
-        ranked = sorted(
-            [(k, v) for k, v in scores.items() if not k.endswith("_doc")],
-            key=lambda x: x[1], reverse=True
+        query_clause = (
+            {"bool": {
+                "must": [{"match": {"content": query}}],
+                "filter": [doc_filter]
+            }} if doc_filter
+            else {"match": {"content": query}}
         )
-        return [scores[doc_id + "_doc"] for doc_id, _ in ranked[:5]]
 
-    def _resolve_index_and_root(self, source_type: str) -> tuple[str, str]:
-        if source_type == "artefatos":
-            return settings.index_artefatos, "artefato"
-        return settings.index_documentos, "ato"
+        knn_clause = {
+            "field": "embedding_vector",
+            "query_vector": query_vector,
+            "k": 5,
+            "num_candidates": 50,
+            **({"filter": doc_filter} if doc_filter else {}),
+        }
 
-    def _resolve_chunks_index(self, source_type: str) -> str:
-        if source_type == "artefatos":
-            return settings.index_artefatos_chunks
-        return settings.index_documentos_chunks
+        body = {
+            "query": query_clause,
+            "knn": knn_clause,
+            "rank": {"rrf": {"window_size": 10}},
+            "size": 5,
+        }
+
+        result = await self.es.search(index=",".join(indices), body=body)
+        return result["hits"]["hits"]
 
     def _resolve_chunks_indices(self, source_type: str = None) -> list[str]:
         if source_type == "documentos_ifal_v2":
@@ -2004,20 +2480,39 @@ class ChatService:
             return [settings.index_artefatos_chunks]
         return self.chunks_indices
 
-    async def _get_history(self, session_id: str) -> list[dict]:
-        """Recupera últimas N mensagens da sessão."""
-        try:
-            doc = await self.es.get(index=self.sessions_index, id=session_id)
-            messages = doc["_source"].get("messages", [])
-            return messages[-settings.CHAT_HISTORY_MAX_MESSAGES:]
-        except Exception:
-            return []
-
-    async def _save_message(self, session_id: str, user_msg: str, assistant_msg: str):
-        """Salva mensagens no histórico."""
-        now = datetime.utcnow().isoformat()
-        # Implementação com scripted upsert para append nas messages
-        pass
+    async def _append_and_renew(self, session_id: str, user_msg: str, assistant_msg: str):
+        """Adiciona as duas mensagens ao histórico e renova expires_at."""
+        now = datetime.utcnow()
+        expires_at = now + timedelta(hours=settings.CHAT_SESSION_TTL_HOURS)
+        new_messages = [
+            {"role": "user",      "content": user_msg,      "timestamp": now.isoformat()},
+            {"role": "assistant", "content": assistant_msg, "timestamp": now.isoformat()},
+        ]
+        # Scripted upsert: append nas messages + atualiza timestamps
+        script = {
+            "source": """
+                ctx._source.messages.addAll(params.new_messages);
+                if (ctx._source.messages.size() > params.max_messages) {
+                    ctx._source.messages = ctx._source.messages.subList(
+                        ctx._source.messages.size() - params.max_messages,
+                        ctx._source.messages.size()
+                    );
+                }
+                ctx._source.last_activity_at = params.now;
+                ctx._source.expires_at = params.expires_at;
+            """,
+            "params": {
+                "new_messages": new_messages,
+                "max_messages": settings.CHAT_HISTORY_MAX_MESSAGES,
+                "now": now.isoformat(),
+                "expires_at": expires_at.isoformat(),
+            }
+        }
+        await self.es.update(
+            index=self.sessions_index,
+            id=session_id,
+            body={"script": script}
+        )
 
     def _format_chunks_context(self, chunks: list[dict]) -> str:
         return "\n\n".join(hit["_source"]["content"] for hit in chunks)
@@ -2027,40 +2522,58 @@ class ChatService:
 
 ## 14. CLI
 
+Quatro modos de seleção de documentos, mutuamente exclusivos:
+
+| Modo | Flag | Uso típico |
+|------|------|-----------|
+| Por quantidade | `--count N` | Dia-a-dia: processa os próximos N não-enriquecidos |
+| Por IDs | `--ids id1,id2` | Re-processar docs específicos |
+| Por diretório | `--directory <path>` | Ingestão inicial a partir de PDFs locais |
+| Varredura total | `--from-es` | Enriquecimento em massa de todo o índice |
+
+### Estratégia de chamadas LLM (`--enrich`)
+
+Quando `summary + entities + keywords` são todos selecionados, o CLI usa `enrich_combined()` — **uma única chamada LLM** que retorna os três em JSON estruturado. Isso reduz o custo em ~67% vs 3 chamadas individuais (mesmo conteúdo enviado 1x em vez de 3x). A `GeminiProvider` tem override otimizado; outros providers fazem fallback para 3 chamadas.
+
+### Estratégia de embedding (`--vectorize`)
+
+- **Se resumo existe**: embeda o resumo (`embedding_source: "resumo"`) — representação semântica compacta
+- **Se não há resumo**: embeda os primeiros **5000 chars** do conteúdo (`embedding_source: "inicio_documento"`) — sem chamada LLM, custo zero além do embedding
+- `--vectorize` é independente de `--summarize`; não gera resumo automaticamente
+
+### Split de provedor
+
+```env
+ACTIVE_LLM_PROVIDER=ollama        # geração: summary, entities, keywords, chat
+ACTIVE_EMBEDDING_PROVIDER=gemini  # embeddings: vectorization, chunking
+```
+
+Permite usar Ollama local (gratuito) para geração e Gemini (gratuito no free tier) para embeddings simultaneamente. `EnrichmentService` recebe dois providers: `llm` e `embed`.
+
+### Paginação `--from-es`
+
+Usa **Scroll API** (`scroll="10m"`) — `search_after` por `_id` exigiria `indices.id_field_data.enabled=true` no ES. Com `--skip-existing` (default `True`), filtra na query ES com `must_not: exists: {root}.resumo_at`. Docs com `attachment.content` vazio são excluídos via `must_not: wildcard: attachment.content: "*"`.
+
 ```python
-# app/cli/main.py
-import typer
-
-app = typer.Typer(name="iuna")
-
-@app.command()
-def setup_indices(suffix: str = "", recreate: bool = False):
-    """Cria índices no ES a partir dos arquivos elastic/*.json."""
-    # Lê cada arquivo .json em elastic/
-    # Cria índice com nome + suffix
-    # Se --recreate: deleta antes de criar
-    pass
-
+# app/cli/main.py (implementação atual)
 @app.command()
 def enrich(
-    source_type: str = typer.Option(..., help="documentos_ifal_v2 | artefatos"),
-    directory: str = typer.Option(None, help="Diretório com arquivos"),
-    ids: list[str] = typer.Option(None, help="Lista de IDs"),
-    summarize: bool = False,
-    vectorize: bool = False,
-    entities: bool = False,
-    chunk: bool = False,
-    enrich_all: bool = typer.Option(False, "--enrich", help="Todas as operações"),
-    force: bool = False,
-    skip_existing: bool = False,
-    concurrency: int = typer.Option(3),
-):
-    """Enriquece documentos em lote."""
-    # Resolve parâmetros para o tipo
-    index, chunks_index, root = _resolve_source(source_type)
-    # Para cada doc: chama EnrichmentService com (index, doc_id, root)
-    # Ordem: entidades → resumo → vetorização → chunking (se >= 10k chars)
-    pass
+    source_type: str = typer.Option(..., "--source-type"),
+    ids: str = typer.Option(None, "--ids"),
+    count: int = typer.Option(None, "--count"),
+    directory: str = typer.Option(None, "--directory"),
+    from_es: bool = typer.Option(False, "--from-es"),
+    batch_size: int = typer.Option(50, "--batch-size"),
+    summarize: bool = typer.Option(False, "--summarize"),
+    vectorize: bool = typer.Option(False, "--vectorize"),
+    entities: bool = typer.Option(False, "--entities"),
+    keywords: bool = typer.Option(False, "--keywords"),
+    chunk: bool = typer.Option(False, "--chunk"),
+    enrich_all: bool = typer.Option(False, "--enrich"),
+    force: bool = typer.Option(False, "--force"),
+    skip_existing: bool = typer.Option(True, "--skip-existing/--no-skip-existing"),
+    concurrency: int = typer.Option(3, "--concurrency"),
+): ...
 
 @app.command()
 def index(
@@ -2205,15 +2718,18 @@ Header `X-Request-Id` em todas as respostas.
 | 8 | **PDF extraction primária via ES Ingest Pipeline (Apache Tika)** | Envia PDF como base64 com `?pipeline=attachment_pipeline`. ES/Tika extrai texto. Fallback local (`pdf_extractor_local.py` com pdfplumber) apenas para offline/testes. |
 | 9 | **Embedding a partir do resumo** | Resumos são mais densos semanticamente que texto bruto. Melhora qualidade do kNN. |
 | 10 | **Chunking só para docs >= 10k chars** | Docs pequenos cabem inteiros no contexto do LLM. Evita overhead desnecessário. |
-| 11 | **RRF para busca híbrida no chat** | Combina precisão do BM25 com semântica do kNN sem tuning manual de pesos. |
+| 11 | **RRF nativo ES (8.9+) para busca híbrida no chat** | Uma única query com `rank: {rrf: {}}` combina BM25 + kNN sem duas chamadas separadas e sem merge manual. Disponível a partir do ES 8.9 (projeto usa 8.12+). |
 | 12 | **Rasa com fallback** | Se Rasa cair, chat continua funcionando no modo `ask_about_document`. |
+| 21 | **TTL de sessão via campo `expires_at` + filtro** | `expires_at = created_at + CHAT_SESSION_TTL_HOURS`. Renovado a cada mensagem. Sessões expiradas retornam 404 e são recriadas. Sem ILM ou cron — simples e sem infra extra. |
+| 22 | **`document_ids` vivem na sessão, não no request** | `POST /chat/message` não recebe IDs de documentos. O contexto é construído a partir de `context_document_ids`/`context_artefato_ids` persistidos na sessão via `add-documento`/`add-artefato`. Separa o gerenciamento de contexto do envio de mensagens. |
 | 13 | **CLI com Typer** | API moderna, tipada, autocompletion. Compartilha services com a API HTTP. |
 | 14 | **Bearer token simples** | Consumidores são apps, não humanos. Token único é suficiente. |
 | 15 | **ES via HTTPS com `verify_certs=False`** | Instância de dev usa certificado auto-assinado. Em produção, habilitar verificação. |
 | 16 | **SDK `google-genai` para Gemini** | Pacote oficial moderno. `google-generativeai` está deprecated. Exponential backoff obrigatório por rate limits do free tier. |
 | 17 | **LegadoSearchService standalone (não estende BaseSearchService)** | O índice legado não tem `popularity_score` — sem `function_score`. Replicar comportamento exato do Laravel é mais direto sem herança forçada de uma base que pressupõe enriquecimento. |
 | 18 | **`with_aggregations=true` por padrão no legado** | O sistema Laravel retornava facetas junto com a busca na página 1. Manter esse default evita breaking change para clientes migrando do legado. Para v2, default é `false` — cliente controla se usa `/facets` ou `with_aggregations`. |
-| 19 | **`/{doc_id}/similar` registrado antes de `/{doc_id}`** | FastAPI casa rotas em ordem de registro. Sem essa ordenação, o segmento "similar" seria capturado como `doc_id` pela rota genérica. |
+| 19 | **`/{doc_id}/related` registrado antes de `/{doc_id}`** | FastAPI casa rotas em ordem de registro. Sem essa ordenação, o segmento "related" seria capturado como `doc_id` pela rota genérica. Mesmo princípio se aplica a `/similar` no legado. |
+| 23 | **`search_related` usa todos os sinais de enriquecimento com fallback progressivo** | kNN + entidades + keywords + MLT combinados via RRF nativo. Se o documento não tem enriquecimento completo, usa os sinais disponíveis: só embedding → kNN+MLT; só entidades/keywords → entidades+keywords+MLT; sem nada → MLT puro. Resposta inclui `enrichment_used` para rastreabilidade. |
 | 20 | **`exact_phrase` e `with_aggregations` propagados para v2** | Parâmetros introduzidos no legado que trazem valor para todos os endpoints de busca. Consistência de interface entre legado e v2. |
 
 ---
@@ -2299,26 +2815,44 @@ sequenceDiagram
     Client->>Router: POST /chat/message {message, session_id}
     Router->>Chat: handle_message(message, session_id)
 
+    Note over Chat: 1. Buscar/criar sessão (verifica expires_at)
+    Chat->>ES: get(chat_sessions, session_id)
+    ES-->>Chat: session {messages, context_document_ids, context_artefato_ids, expires_at}
+
+    Note over Chat: 2. Classificar intenção
     Chat->>Rasa: POST /model/parse {text: message}
     Rasa-->>Chat: {intent: "ask_about_document"}
 
-    Chat->>ES: get(chat_sessions, session_id) → últimas 10 msgs
-    ES-->>Chat: history[]
-
-    Note over Chat: Busca híbrida nos chunks
-    Chat->>ES: search(chunks, BM25 query)
-    ES-->>Chat: bm25_results
+    Note over Chat: 3. Busca híbrida RRF (1 chamada, nativa ES 8.9+)
     Chat->>LLM: generate_embedding(message)
     LLM-->>Chat: query_vector
-    Chat->>ES: search(chunks, kNN query_vector)
-    ES-->>Chat: knn_results
-    Chat->>Chat: RRF merge → top 5 chunks
+    Chat->>ES: search(chunks, {query: BM25, knn: kNN, rank: {rrf: {}}})
+    ES-->>Chat: top 5 chunks já ranqueados por RRF
 
+    Note over Chat: 4. Gerar resposta
     Chat->>LLM: generate_response(context=chunks, question=message, history)
     LLM-->>Chat: resposta
 
-    Chat->>ES: update(chat_sessions) → append messages
-    Chat-->>Router: {response, intent, session_id}
+    Note over Chat: 5. Persistir + renovar TTL
+    Chat->>ES: update(chat_sessions) → append messages + renew expires_at
+    Chat-->>Router: {response, intent, session_id, context_document_ids, context_artefato_ids}
+    Router-->>Client: 200 {success: true, data: {...}}
+```
+
+**Fluxo alternativo — adicionar documento ao contexto:**
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Router as chat.py
+    participant Chat as ChatService
+    participant ES as Elasticsearch
+
+    Client->>Router: POST /chat/sessions/{id}/add-documento {document_id: "abc"}
+    Router->>Chat: add_document_to_context(session_id, "abc")
+    Chat->>ES: get(chat_sessions, session_id) → verifica TTL
+    Chat->>ES: update → context_document_ids: ["abc"]
+    Chat-->>Router: {context_document_ids: ["abc"], context_artefato_ids: []}
     Router-->>Client: 200 {success: true, data: {...}}
 ```
 

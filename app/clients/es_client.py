@@ -74,9 +74,12 @@ class ESClient:
         response = await self.client.search(index=index, body=body)
         return response.body
 
-    async def get(self, index: str, id: str) -> dict:
+    async def get(self, index: str, id: str, source_includes: Optional[list[str]] = None) -> dict:
         """Get a document by ID."""
-        response = await self.client.get(index=index, id=id)
+        kwargs: dict = {"index": index, "id": id}
+        if source_includes:
+            kwargs["source_includes"] = source_includes
+        response = await self.client.get(**kwargs)
         return response.body
 
     async def index(self, index: str, body: dict, id: Optional[str] = None) -> dict:

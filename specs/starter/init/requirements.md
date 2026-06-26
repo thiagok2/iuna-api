@@ -237,6 +237,7 @@ Todas as operações deste módulo funcionam para ambos os tipos de objeto via `
 
 **`iuna enrich`** — Enriquecimento em lote (envolve LLM):
 - **RF-04u.29**: `iuna enrich --source-type <tipo> --directory <path>` ou `--ids <id1,id2>` → opera sobre docs já indexados.
+- **RF-04u.29b**: `iuna enrich --source-type <tipo> --from-es [--skip-existing] [--batch-size N]` → varre o índice ES inteiro de forma paginada via `search_after` e enriquece todos os documentos. Dispensa `--directory` ou `--ids`. `--skip-existing` filtra na query ES os documentos que já possuem `{root}.resumo_at` preenchido (proxy de "já enriquecido") — evita LLM desnecessário. `--batch-size N` (default 100) controla quantos IDs são buscados por página de scroll. Progresso exibido por lote (`[lote X] N docs, Y sucesso, Z erro`).
 - **RF-04u.30**: Flags seletivas: `--summarize`, `--vectorize`, `--entities`, `--keywords`, `--chunk`. Atalho `--enrich` = todas.
 - **RF-04u.31**: Para cada documento executa os serviços na ordem: entidades → keywords → resumo → vetorização (usa resumo) → chunking (se conteúdo ≥ 10.000 chars).
 - **RF-04u.32**: `--force` (reprocessar tudo) e `--skip-existing` (pular se `*_at` já existe).

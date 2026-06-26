@@ -47,7 +47,7 @@ check "ação inválida" 422 "$CODE"
 
 sep "5. Verificar popularity_score no ES após incrementos"
 curl -s -H "Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=" \
-  "https://elastic.pnld-avaliacao-dev.nees.ufal.br/documentos_ifal_v2/$DOCUMENTO_ID?pretty" \
+  "https://elastic.pnld-avaliacao-dev.nees.ufal.br/documentos_ifal_v2/_doc/$DOCUMENTO_ID?pretty" \
   | python3 -c "
 import sys, json
 d = json.load(sys.stdin)

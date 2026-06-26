@@ -2,8 +2,8 @@ from app.config import settings
 from app.providers.base import BaseLLMProvider
 
 
-def get_llm_provider() -> BaseLLMProvider:
-    match settings.ACTIVE_LLM_PROVIDER:
+def _build_provider(name: str) -> BaseLLMProvider:
+    match name:
         case "gemini":
             from app.providers.gemini import GeminiProvider
             return GeminiProvider(
@@ -19,4 +19,12 @@ def get_llm_provider() -> BaseLLMProvider:
             from app.providers.ollama import OllamaProvider
             return OllamaProvider(base_url=settings.OLLAMA_BASE_URL, model=settings.OLLAMA_MODEL)
         case _:
-            raise ValueError(f"Provider desconhecido: {settings.ACTIVE_LLM_PROVIDER}")
+            raise ValueError(f"Provider desconhecido: {name}")
+
+
+def get_llm_provider() -> BaseLLMProvider:
+    return _build_provider(settings.ACTIVE_LLM_PROVIDER)
+
+
+def get_embedding_provider() -> BaseLLMProvider:
+    return _build_provider(settings.ACTIVE_EMBEDDING_PROVIDER)

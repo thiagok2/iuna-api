@@ -4,7 +4,8 @@ Search routes for artefatos.
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Path, Query
+from elasticsearch import NotFoundError as ESNotFoundError
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 
 from app.api.dependencies import verify_token
 from app.api.models.responses import APIResponse, SearchResponse
@@ -69,20 +70,23 @@ async def search_artefatos(
 
 
 @router.get(
-    "/similar/{artefato_id}",
-    summary="Artefatos similares (More Like This)",
-    description="Encontra artefatos similares ao artefato informado usando More Like This "
-    "ou busca vetorial por similaridade de embeddings.",
+    "/related/{artefato_id}",
+    summary="Artefatos relacionados (RRF multi-sinal)",
+    description="Combina MLT, entidades, keywords e embedding (quando disponível) via RRF para retornar "
+    "artefatos semanticamente relacionados. `enrichment_used` indica quais sinais foram aplicados.",
     response_model=SearchResponse,
 )
-async def search_artefatos_similar(
+async def search_artefatos_related(
     artefato_id: str = Path(..., description="ID do artefato de referência", examples=["art-456"]),
-    page_size: int = Query(10, ge=1, le=50, description="Quantidade de resultados", examples=[10]),
+    limit: int = Query(10, ge=1, le=50, description="Quantidade de resultados", examples=[10]),
 ):
-    result = await _svc().search_similar(_INDEX(), artefato_id, page_size)
+    try:
+        result = await _svc().search_related(_INDEX(), artefato_id, limit)
+    except ESNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Artefato não encontrado: {artefato_id}")
     return SearchResponse(
         data=result["results"],
-        meta={"total": result["total"]},
+        meta={"total": result["total"], "enrichment_used": result["enrichment_used"]},
     )
 
 

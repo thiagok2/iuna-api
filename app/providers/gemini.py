@@ -39,7 +39,7 @@ class GeminiProvider(BaseLLMProvider):
     async def extract_entities(self, text: str) -> list[dict]:
         prompt = (
             "Extraia entidades nomeadas do texto abaixo.\n"
-            "Retorne APENAS um JSON válido (sem markdown, sem explicações) com uma lista:\n"
+            "Retorne APENAS um JSON válido (sem markdown, sem explicações) com uma lista. Máximo 30 itens.\n"
             '[{"texto": "nome", "categoria": "CATEGORIA", "confianca": 0.95}]\n\n'
             "Categorias: PESSOA, ORGANIZACAO, LOCAL, DATA, DOCUMENTO, OUTRO\n\n"
             f"Texto:\n{text[:_MAX_INPUT_CHARS]}\n\nJSON:"
@@ -56,6 +56,47 @@ class GeminiProvider(BaseLLMProvider):
         )
         raw = await self._generate(prompt)
         return self._parse_json_list(raw, default=[])
+
+    async def enrich_document_combined(self, text: str) -> dict:
+        prompt = (
+            "Analise o documento abaixo e retorne APENAS um JSON válido (sem markdown, sem explicações) "
+            "com exatamente este formato:\n"
+            '{"resumo": "...", "entidades": [{"texto": "...", "categoria": "...", "confianca": 0.0}], "keywords": ["..."]}\n\n'
+            "Regras:\n"
+            "- resumo: entre 100 e 500 palavras, português, pontos principais\n"
+            "- entidades: categorias PESSOA | ORGANIZACAO | LOCAL | DATA | DOCUMENTO | OUTRO\n"
+            "- keywords: máximo 20 termos relevantes\n\n"
+            f"Documento:\n{text[:_MAX_INPUT_CHARS]}\n\nJSON:"
+        )
+        raw = await self._generate(prompt)
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            lines = [l for l in cleaned.split("\n") if not l.startswith("```")]
+            cleaned = "\n".join(lines).strip()
+        try:
+            import json as _json
+            result = _json.loads(cleaned)
+            if isinstance(result, dict):
+                return {
+                    "resumo": result.get("resumo", ""),
+                    "entidades": result.get("entidades", []),
+                    "keywords": result.get("keywords", []),
+                }
+        except Exception:
+            start, end = cleaned.find("{"), cleaned.rfind("}")
+            if start != -1 and end != -1:
+                try:
+                    import json as _json
+                    result = _json.loads(cleaned[start:end + 1])
+                    return {
+                        "resumo": result.get("resumo", ""),
+                        "entidades": result.get("entidades", []),
+                        "keywords": result.get("keywords", []),
+                    }
+                except Exception:
+                    pass
+        logger.warning("enrich_document_combined: parse falhou, fazendo fallback 3 chamadas")
+        return await super().enrich_document_combined(text)
 
     async def generate_response(
         self, context: str, question: str, history: list[dict] | None = None
@@ -85,7 +126,7 @@ class GeminiProvider(BaseLLMProvider):
         except Exception:
             return False
 
-    async def _generate(self, prompt: str, max_retries: int = 5) -> str:
+    async def _generate(self, prompt: str, max_retries: int = 3) -> str:
         for attempt in range(max_retries):
             try:
                 response = await self._client.aio.models.generate_content(
@@ -103,7 +144,7 @@ class GeminiProvider(BaseLLMProvider):
                     raise
         return ""
 
-    async def _embed(self, text: str, max_retries: int = 5) -> list[float]:
+    async def _embed(self, text: str, max_retries: int = 3) -> list[float]:
         for attempt in range(max_retries):
             try:
                 result = await self._client.aio.models.embed_content(
@@ -129,17 +170,41 @@ class GeminiProvider(BaseLLMProvider):
         if cleaned.startswith("```"):
             lines = [l for l in cleaned.split("\n") if not l.startswith("```")]
             cleaned = "\n".join(lines).strip()
+
+        # tentativa 1: JSON completo
         try:
             result = json.loads(cleaned)
             if isinstance(result, list):
                 return result
         except json.JSONDecodeError:
-            start, end = cleaned.find("["), cleaned.rfind("]")
-            if start != -1 and end != -1:
-                try:
-                    return json.loads(cleaned[start : end + 1])
-                except json.JSONDecodeError:
-                    pass
+            pass
+
+        start = cleaned.find("[")
+        if start == -1:
+            logger.warning("Não foi possível parsear lista JSON do LLM: %.200s", raw)
+            return default
+
+        # tentativa 2: extrai o bloco [...] explícito
+        end = cleaned.rfind("]")
+        if end != -1:
+            try:
+                result = json.loads(cleaned[start:end + 1])
+                if isinstance(result, list):
+                    return result
+            except json.JSONDecodeError:
+                pass
+
+        # tentativa 3: JSON truncado — fecha no último objeto completo
+        last_close = cleaned.rfind("}")
+        if last_close > start:
+            try:
+                result = json.loads(cleaned[start:last_close + 1] + "]")
+                if isinstance(result, list):
+                    logger.warning("JSON truncado pelo LLM: recuperados %d itens (resposta cortada)", len(result))
+                    return result
+            except json.JSONDecodeError:
+                pass
+
         logger.warning("Não foi possível parsear lista JSON do LLM: %.200s", raw)
         return default
 

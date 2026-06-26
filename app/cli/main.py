@@ -275,7 +275,10 @@ async def _run_ingest(
 def enrich(
     source_type: str = typer.Option(..., "--source-type", help="documentos_ifal_v2 | artefatos"),
     ids: str = typer.Option(None, "--ids", help="IDs separados por vírgula"),
+    count: int = typer.Option(None, "--count", help="Busca N docs não-enriquecidos do ES automaticamente"),
     directory: str = typer.Option(None, "--directory", help="Diretório com PDFs (resolve por filename)"),
+    from_es: bool = typer.Option(False, "--from-es", help="Varre o índice ES inteiro paginado via scroll"),
+    batch_size: int = typer.Option(50, "--batch-size", help="Docs por lote no modo --from-es (default 50)"),
     summarize: bool = typer.Option(False, "--summarize", help="Gerar resumo"),
     vectorize: bool = typer.Option(False, "--vectorize", help="Gerar embedding"),
     entities: bool = typer.Option(False, "--entities", help="Extrair entidades"),
@@ -283,12 +286,16 @@ def enrich(
     chunk: bool = typer.Option(False, "--chunk", help="Gerar chunks"),
     enrich_all: bool = typer.Option(False, "--enrich", help="Executar todas as operações"),
     force: bool = typer.Option(False, "--force", help="Re-enriquecer mesmo se já existir"),
-    skip_existing: bool = typer.Option(False, "--skip-existing", help="Pular docs já enriquecidos"),
+    skip_existing: bool = typer.Option(True, "--skip-existing/--no-skip-existing", help="Pular docs já enriquecidos (default: True)"),
     concurrency: int = typer.Option(3, "--concurrency", help="Concorrência máxima"),
 ) -> None:
     """Enriquece documentos com IA (resumo, entidades, keywords, embedding, chunks)."""
-    if not ids and not directory:
-        typer.echo("❌ Forneça --ids ou --directory")
+    modes = sum([bool(ids), bool(count), bool(directory), from_es])
+    if modes == 0:
+        typer.echo("❌ Forneça um modo: --count, --ids, --directory ou --from-es")
+        raise typer.Exit(code=1)
+    if modes > 1:
+        typer.echo("❌ Use apenas um modo por vez: --count, --ids, --directory ou --from-es")
         raise typer.Exit(code=1)
 
     ops: set[str] = set()
@@ -310,7 +317,10 @@ def enrich(
         typer.echo("⚠️  Nenhuma operação selecionada. Use --enrich ou flags específicas (--summarize, --entities, etc.)")
         raise typer.Exit(code=1)
 
-    asyncio.run(_run_enrich(source_type, ids, directory, ops, force, skip_existing, concurrency))
+    if from_es:
+        asyncio.run(_run_enrich_from_es(source_type, ops, batch_size, force, skip_existing, concurrency))
+    else:
+        asyncio.run(_run_enrich(source_type, ids, directory, ops, force, skip_existing, concurrency, count))
 
 
 async def _run_enrich(
@@ -321,9 +331,10 @@ async def _run_enrich(
     force: bool,
     skip_existing: bool,
     concurrency: int,
+    count: int | None = None,
 ) -> None:
     from app.clients.es_client import es_client
-    from app.providers.factory import get_llm_provider
+    from app.providers.factory import get_embedding_provider, get_llm_provider
     from app.services.enrichment import EnrichmentService
 
     valid_types = ("documentos_ifal_v2", "artefatos")
@@ -342,12 +353,37 @@ async def _run_enrich(
     chunks_index = settings.index_artefatos_chunks if is_artefatos else settings.index_documentos_ifal_v2_chunks
     root = "artefato" if is_artefatos else "ato"
 
-    svc = EnrichmentService(es_client, get_llm_provider())
+    svc = EnrichmentService(es_client, get_llm_provider(), get_embedding_provider())
 
     # Resolve IDs
     doc_ids: list[str] = []
 
-    if ids_str:
+    if count:
+        # determina o campo de skip pela primeira operação de geração presente
+        skip_field = next(
+            (f for op, f in [
+                ("entities", f"{root}.entidades_at"),
+                ("keywords", f"{root}.keywords_at"),
+                ("summary", f"{root}.resumo_at"),
+                ("vectorization", f"{root}.embedding_vector_at"),
+                ("chunking", f"{root}.chunking_at"),
+            ] if op in ops),
+            f"{root}.entidades_at",
+        )
+        must_not: list[dict] = [{"bool": {"must_not": [{"wildcard": {"attachment.content": "*"}}]}}]
+        if skip_existing and not force:
+            must_not.append({"exists": {"field": skip_field}})
+        resp = await es_client.search(
+            index=index,
+            body={"query": {"bool": {"must_not": must_not}}, "_source": False, "size": count},
+        )
+        doc_ids = [h["_id"] for h in resp.get("hits", {}).get("hits", [])]
+        if not doc_ids:
+            typer.echo("⚠️  Nenhum documento pendente encontrado.")
+            await es_client.close()
+            return
+        typer.echo(f"📌 --count {count}: {len(doc_ids)} doc(s) encontrado(s) via ES")
+    elif ids_str:
         doc_ids = [i.strip() for i in ids_str.split(",") if i.strip()]
     elif directory:
         dir_path = Path(directory)
@@ -398,12 +434,15 @@ async def _run_enrich(
                     pass
 
             try:
-                if "entities" in ops:
-                    await svc.enrich_entities(index, doc_id, root)
-                if "keywords" in ops:
-                    await svc.enrich_keywords(index, doc_id, root)
-                if "summary" in ops:
-                    await svc.enrich_summary(index, doc_id, root)
+                if {"summary", "entities", "keywords"} <= ops:
+                    await svc.enrich_combined(index, doc_id, root)
+                else:
+                    if "entities" in ops:
+                        await svc.enrich_entities(index, doc_id, root)
+                    if "keywords" in ops:
+                        await svc.enrich_keywords(index, doc_id, root)
+                    if "summary" in ops:
+                        await svc.enrich_summary(index, doc_id, root)
                 if "vectorization" in ops:
                     await svc.enrich_vector(index, doc_id, root)
                 if "chunking" in ops:
@@ -426,6 +465,152 @@ async def _run_enrich(
     typer.echo(f"🏁 Enriquecimento finalizado: {success_count} sucesso, {error_count} erro(s)")
 
 
+async def _run_enrich_from_es(
+    source_type: str,
+    ops: set[str],
+    batch_size: int,
+    force: bool,
+    skip_existing: bool,
+    concurrency: int,
+) -> None:
+    from app.clients.es_client import es_client
+    from app.providers.factory import get_embedding_provider, get_llm_provider
+    from app.services.enrichment import EnrichmentService
+
+    valid_types = ("documentos_ifal_v2", "artefatos")
+    if source_type not in valid_types:
+        typer.echo(f"❌ source-type inválido: {source_type}. Use: {', '.join(valid_types)}")
+        raise typer.Exit(code=1)
+
+    try:
+        await es_client.connect()
+    except Exception as exc:
+        typer.echo(f"❌ Erro ao conectar ao Elasticsearch: {exc}")
+        raise typer.Exit(code=1)
+
+    is_artefatos = source_type == "artefatos"
+    index = settings.index_artefatos if is_artefatos else settings.index_documentos_ifal_v2
+    chunks_index = settings.index_artefatos_chunks if is_artefatos else settings.index_documentos_ifal_v2_chunks
+    root = "artefato" if is_artefatos else "ato"
+
+    svc = EnrichmentService(es_client, get_llm_provider(), get_embedding_provider())
+
+    from app.core.exceptions import ValidationError as ServiceValidationError
+
+    # wildcard exige ao menos um char no content (exists não pega string vazia)
+    must_clauses: list[dict] = [{"wildcard": {"attachment.content": "*"}}]
+
+    query: dict
+    if skip_existing and not force:
+        query = {
+            "bool": {
+                "must": must_clauses,
+                "must_not": [{"exists": {"field": f"{root}.resumo_at"}}],
+            }
+        }
+    else:
+        query = {"bool": {"must": must_clauses}}
+
+    # contar total antes de iniciar para dar visibilidade
+    count_resp = await es_client.search(index=index, body={"query": query, "size": 0})
+    total_docs = count_resp.get("hits", {}).get("total", {}).get("value", 0)
+
+    typer.echo(f"📌 Modo: --from-es | Índice: {index} | Total: {total_docs} docs | Batch: {batch_size}")
+    typer.echo(f"📌 Operações: {', '.join(sorted(ops))} | Skip-existing: {skip_existing} | Concorrência: {concurrency}")
+    typer.echo("")
+
+    if total_docs == 0:
+        typer.echo("⚠️  Nenhum documento para processar.")
+        await es_client.close()
+        return
+
+    semaphore = asyncio.Semaphore(concurrency)
+    total_success = 0
+    total_errors = 0
+    batch_num = 0
+
+    total_skipped = 0
+
+    _GEN_OPS = {"summary", "entities", "keywords"}
+
+    async def _process(doc_id: str) -> bool | None:
+        async with semaphore:
+            try:
+                if _GEN_OPS <= ops:
+                    # todas as 3 ops de geração juntas → 1 chamada LLM + 1 update ES
+                    await svc.enrich_combined(index, doc_id, root)
+                else:
+                    if "entities" in ops:
+                        await svc.enrich_entities(index, doc_id, root)
+                    if "keywords" in ops:
+                        await svc.enrich_keywords(index, doc_id, root)
+                    if "summary" in ops:
+                        await svc.enrich_summary(index, doc_id, root)
+                if "vectorization" in ops:
+                    await svc.enrich_vector(index, doc_id, root)
+                if "chunking" in ops:
+                    await svc.enrich_chunks(index, chunks_index, doc_id, root)
+                typer.echo(f"  ✅ {doc_id}")
+                return True
+            except ServiceValidationError as exc:
+                typer.echo(f"  ⏭  {doc_id} — {exc}")
+                return None
+            except Exception as exc:
+                typer.echo(f"  ❌ {doc_id} — {exc}")
+                return False
+
+    # Scroll: snapshot consistente sem depender de fielddata ou PIT
+    first_resp = await es_client.client.search(
+        index=index,
+        body={"query": query, "_source": False, "size": batch_size},
+        scroll="10m",
+    )
+    scroll_id: str = first_resp.body["_scroll_id"]
+    hits = first_resp.body.get("hits", {}).get("hits", [])
+
+    try:
+        while hits:
+            batch_num += 1
+            doc_ids = [h["_id"] for h in hits]
+
+            typer.echo(f"── Lote {batch_num} ({len(doc_ids)} docs) ─────────────────────────────")
+            results = await asyncio.gather(*[_process(doc_id) for doc_id in doc_ids])
+
+            batch_ok = sum(1 for r in results if r is True)
+            batch_skip = sum(1 for r in results if r is None)
+            batch_err = sum(1 for r in results if r is False)
+            total_success += batch_ok
+            total_skipped += batch_skip
+            total_errors += batch_err
+
+            typer.echo(
+                f"   ↳ lote {batch_num}: {batch_ok} ✅ / {batch_skip} ⏭  / {batch_err} ❌ "
+                f"| acumulado: {total_success} OK / {total_skipped} skip / {total_errors} erro"
+            )
+            typer.echo("")
+
+            # circuit breaker: lote inteiro falhou → API indisponível, aborta
+            real_processed = batch_ok + batch_err
+            if real_processed > 0 and batch_err == real_processed:
+                typer.echo("🛑 Circuit breaker: lote inteiro com erro — API provavelmente indisponível. Abortando.")
+                break
+
+            if len(hits) < batch_size:
+                break
+
+            next_resp = await es_client.client.scroll(scroll_id=scroll_id, scroll="10m")
+            scroll_id = next_resp.body["_scroll_id"]
+            hits = next_resp.body.get("hits", {}).get("hits", [])
+    finally:
+        try:
+            await es_client.client.clear_scroll(scroll_id=scroll_id)
+        except Exception:
+            pass
+
+    await es_client.close()
+    typer.echo(f"🏁 --from-es finalizado: {total_success} ✅ / {total_skipped} ⏭  / {total_errors} ❌  em {batch_num} lote(s)")
+
+
 @app.command()
 def delete() -> None:
     """Apaga documentos ou índices."""
@@ -433,9 +618,80 @@ def delete() -> None:
 
 
 @app.command()
-def stats() -> None:
-    """Exibe estatísticas dos índices."""
-    typer.echo("Not implemented yet")
+def stats(
+    source_type: str = typer.Option(None, "--source-type", help="documentos_ifal_v2 | artefatos | (omitir = ambos)"),
+) -> None:
+    """Exibe progresso de enriquecimento por índice."""
+    asyncio.run(_run_stats(source_type))
+
+
+async def _run_stats(source_type: str | None) -> None:
+    from app.clients.es_client import es_client
+
+    try:
+        await es_client.connect()
+    except Exception as exc:
+        typer.echo(f"❌ Erro ao conectar ao Elasticsearch: {exc}")
+        raise typer.Exit(code=1)
+
+    targets = []
+    if source_type == "artefatos" or source_type is None:
+        targets.append((settings.index_artefatos, "artefato"))
+    if source_type == "documentos_ifal_v2" or source_type is None:
+        targets.append((settings.index_documentos_ifal_v2, "ato"))
+
+    for index, root in targets:
+        resp = await es_client.search(index=index, body={
+            "size": 0,
+            "aggs": {
+                "total":      {"filter": {"match_all": {}}},
+                "com_content":{"filter": {"wildcard": {"attachment.content": "*"}}},
+                "entidades":  {"filter": {"exists": {"field": f"{root}.entidades_at"}}},
+                "keywords":   {"filter": {"exists": {"field": f"{root}.keywords_at"}}},
+                "resumo":     {"filter": {"exists": {"field": f"{root}.resumo_at"}}},
+                "embedding":  {"filter": {"exists": {"field": f"{root}.embedding_vector_at"}}},
+                "emb_resumo": {"filter": {"match": {f"{root}.embedding_source": "resumo"}}},
+                "emb_inicio": {"filter": {"match": {f"{root}.embedding_source": "inicio_documento"}}},
+                "chunks":     {"filter": {"exists": {"field": f"{root}.chunking_at"}}},
+            },
+        })
+
+        aggs = resp.get("aggregations", {})
+
+        def n(key: str) -> int:
+            return aggs.get(key, {}).get("doc_count", 0)
+
+        def pct(val: int, total: int) -> str:
+            return f"{val / total * 100:.1f}%" if total else "—"
+
+        def bar(val: int, total: int, width: int = 20) -> str:
+            filled = round(val / total * width) if total else 0
+            return "█" * filled + "░" * (width - filled)
+
+        total = n("total")
+        content = n("com_content")
+        emb = n("embedding")
+
+        typer.echo(f"\n📊 {index}  —  {total} docs totais  ({content} com conteúdo)")
+        typer.echo("─" * 55)
+
+        rows = [
+            ("entidades",  n("entidades")),
+            ("keywords",   n("keywords")),
+            ("resumo",     n("resumo")),
+            ("embedding",  emb),
+            ("  └ resumo", n("emb_resumo")),
+            ("  └ início", n("emb_inicio")),
+            ("chunks",     n("chunks")),
+        ]
+
+        for label, val in rows:
+            base = emb if "└" in label else content
+            typer.echo(f"  {label:<14} {bar(val, base)}  {val:>5} / {base:<5}  {pct(val, base):>6}")
+
+        typer.echo("")
+
+    await es_client.close()
 
 
 # ---------------------------------------------------------------------------

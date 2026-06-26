@@ -5,6 +5,8 @@ BaseSearchService — shared search logic for documentos and artefatos.
 import logging
 from typing import Any, Optional
 
+from elasticsearch import AuthorizationException as ESAuthorizationException
+
 from app.clients.es_client import ESClient
 from app.core.query_helpers import (
     build_highlight,
@@ -185,6 +187,104 @@ class BaseSearchService:
         return {
             "results": self._format_hits(hits_raw.get("hits", [])),
             "total": total,
+        }
+
+    async def search_related(
+        self,
+        index: str,
+        doc_id: str,
+        limit: int = 10,
+    ) -> dict[str, Any]:
+        # dense_vector é excluído do _source padrão no ES 8.x; source_includes força a inclusão
+        source_includes = [
+            f"{self.root}.embedding_vector",
+            f"{self.root}.entidades",
+            f"{self.root}.keywords",
+        ]
+        doc = await self.es.get(index=index, id=doc_id, source_includes=source_includes)
+        root_data = doc.get("_source", {}).get(self.root, {})
+
+        embedding: list[float] | None = root_data.get("embedding_vector")
+        entidades: list[dict] = root_data.get("entidades") or []
+        keywords: list[str] = root_data.get("keywords") or []
+
+        enrichment_used: list[str] = []
+        must_not = [{"term": {"_id": doc_id}}]
+
+        mlt_fields = [f"{self.root}.ementa", self.title_field, "attachment.content"]
+        should: list[dict] = [
+            {
+                "more_like_this": {
+                    "fields": mlt_fields,
+                    "like": [{"_index": index, "_id": doc_id}],
+                    "min_term_freq": 1,
+                    "max_query_terms": 12,
+                    "min_doc_freq": 1,
+                    "boost": 0.5,
+                }
+            }
+        ]
+
+        entity_texts = [e["texto"] for e in entidades if e.get("texto")][:10]
+        if entity_texts:
+            enrichment_used.append("entities")
+            should.append({
+                "nested": {
+                    "path": self.entity_path,
+                    "query": {
+                        "bool": {
+                            "should": [
+                                {"match": {f"{self.entity_path}.texto": t}}
+                                for t in entity_texts
+                            ]
+                        }
+                    },
+                    "boost": 1.5,
+                }
+            })
+
+        if keywords:
+            enrichment_used.append("keywords")
+            should.append({
+                "terms": {
+                    self.keyword_field: keywords[:20],
+                    "boost": 1.2,
+                }
+            })
+
+        body: dict = {
+            "query": {"bool": {"should": should, "must_not": must_not}},
+            "size": limit,
+        }
+
+        if embedding:
+            enrichment_used.append("embedding")
+            body_rrf = {
+                **body,
+                "knn": {
+                    "field": f"{self.root}.embedding_vector",
+                    "query_vector": embedding,
+                    "k": limit,
+                    "num_candidates": limit * 2,
+                    "filter": {"bool": {"must_not": must_not}},
+                },
+                "rank": {"rrf": {"window_size": limit * 2}},
+            }
+            try:
+                resp = await self.es.search(index=index, body=body_rrf)
+            except ESAuthorizationException:
+                # licença sem RRF — fallback para bool query sem kNN
+                logger.warning("RRF não disponível nesta licença ES; usando fallback sem kNN")
+                enrichment_used.remove("embedding")
+                resp = await self.es.search(index=index, body=body)
+        else:
+            resp = await self.es.search(index=index, body=body)
+        hits_raw = resp.get("hits", {})
+        total = hits_raw.get("total", {}).get("value", 0)
+        return {
+            "results": self._format_hits(hits_raw.get("hits", [])),
+            "total": total,
+            "enrichment_used": enrichment_used,
         }
 
     async def search_by_entity(

@@ -265,6 +265,41 @@
 - [x] `iuna ingest --enrich` integrado
 - [x] **Validar**: `bash tests/manual/t13_cli_enrich.sh`
 
+### T-13b: CLI enrich --from-es (lote paginado via Elasticsearch) ✅
+
+> Complementa o `iuna enrich` com um modo que varre o índice inteiro sem precisar de `--directory` ou `--ids`.
+> Útil para enriquecer em massa todos os documentos importados do legado.
+
+- [x] Flag `--from-es` e `--batch-size N` adicionados ao comando `iuna enrich`
+- [x] `--skip-existing` default `True` — filtro na query ES (`must_not: exists: {root}.resumo_at`) em vez de GET por doc
+- [x] Paginação via **Scroll API** (`scroll="10m"`) — `search_after` descartado por limitação de fielddata no `_id` no ambiente de dev
+- [x] Filtro `must_not: wildcard: attachment.content: "*"` exclui docs com conteúdo vazio (string vazia não é capturada por `exists`)
+- [x] `--from-es` mutuamente exclusivo com `--ids`, `--count` e `--directory`
+- [x] Saída por lote: `✅ OK / ⏭ skip / ❌ erro` com acumulado
+- [x] `ValidationError` (conteúdo vazio) tratado como `⏭ skip`, não como erro
+
+### T-13c: CLI enrich --count N ✅
+
+> Modo mais conveniente que `--ids`: busca automaticamente N docs não-enriquecidos do ES.
+
+- [x] Flag `--count N` adicionada ao comando `iuna enrich`
+- [x] Detecta campo de skip pela primeira operação selecionada (`entidades_at`, `keywords_at`, `resumo_at`, etc.)
+- [x] Mutuamente exclusivo com `--ids`, `--directory` e `--from-es`
+- [x] Uso típico:
+  ```bash
+  python -m app.cli.main enrich \
+    --source-type documentos_ifal_v2 \
+    --count 25 \
+    --entities --keywords --vectorize --chunk
+  ```
+
+### T-13d: Otimizações de enriquecimento ✅
+
+- [x] **Split de provedor**: `ACTIVE_EMBEDDING_PROVIDER` separado de `ACTIVE_LLM_PROVIDER` — permite Ollama para geração e Gemini para embeddings simultaneamente (`providers/factory.py: get_embedding_provider()`)
+- [x] **Chamada combinada**: quando `summary + entities + keywords` são solicitados juntos, `enrich_combined()` faz **1 chamada LLM** (em vez de 3) + **1 update ES** — reduz custo em ~67% dos tokens de entrada de geração (`BaseLLMProvider.enrich_document_combined()` com override em `GeminiProvider`)
+- [x] **`enrich_vector` redesenhado**: embeda o resumo se existir; caso contrário, embeda os primeiros 5000 chars do conteúdo (`embedding_source: "resumo" | "inicio_documento"`) — não gera resumo automaticamente, operações são independentes
+- [x] **`--vectorize` sem `--summarize`** agora é seguro e barato (só embedding, sem chamada LLM)
+
 ---
 
 ## Bloco 4 — Busca funcional
@@ -273,33 +308,35 @@
 
 ### T-14: query_helpers.py
 - [x] Criar `app/core/query_helpers.py` — funções puras
-- [ ] **Validar**: `PYTHONPATH=. python tests/manual/t14_query_helpers.py`
+- [x] **Validar**: `PYTHONPATH=. python tests/manual/t14_query_helpers.py`
 
 ### T-15: DocumentosSearchService + Router
 - [x] Criar `app/services/documentos_search.py` (estende `_search_base.py`)
 - [x] Substituir stubs em `search_documentos.py`
-- [ ] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
+- [x] Endpoint renomeado: `GET /documentos/search/related/{document_id}` (substituiu `/similar/`)
+- [x] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
 
 ### T-16: ArtefatosSearchService + Router
 - [x] Criar `app/services/artefatos_search.py`
 - [x] Substituir stubs em `search_artefatos.py`
-- [ ] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
+- [x] Endpoint renomeado: `GET /artefatos/search/related/{artefato_id}` (substituiu `/similar/`)
+- [x] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
 
 ### T-17: ChunksSearchService + Router
 - [x] Criar `app/services/chunks_search.py`
 - [x] Endpoints: `GET /{tipo}/search/chunks`
-- [ ] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
+- [x] **Validar**: `bash tests/manual/t15_t16_t17_search_api.sh`
 
 ### T-18: Scoring (popularity)
 - [x] Criar `app/core/scoring.py` (constantes `SCORE_WEIGHTS`)
 - [x] Criar `app/services/scoring_service.py` (`increment_score`)
 - [x] Substituir stubs em `scoring.py`; `function_score` na busca
-- [ ] **Validar**: `bash tests/manual/t18_scoring.sh`
+- [x] **Validar**: `bash tests/manual/t18_scoring.sh`
 
 ### T-19: Listagem de entidades e keywords
 - [x] `GET /documentos/entities`, `GET /artefatos/entities`
 - [x] `GET /documentos/keywords`, `GET /artefatos/keywords`
-- [ ] **Validar**: `bash tests/manual/t19_entities_keywords.sh`
+- [x] **Validar**: `bash tests/manual/t19_entities_keywords.sh`
 
 ### T-19b: Busca Legado (documentos_ifal)
 - [x] Criar `app/services/legado_search_service.py`:
@@ -314,7 +351,53 @@
 - [x] Adicionar `index_documentos_ifal` (property) em `app/config.py`
 - [x] Registrar `search_legado_router` em `app/main.py`
 - [x] Propagar `exact_phrase` e `with_aggregations` para `search_documentos.py` e `search_artefatos.py` (v2)
-- [ ] **Validar**: `bash tests/manual/t19b_busca_legado.sh`
+- [x] **Validar**: `bash tests/manual/t19b_busca_legado.sh`
+
+### T-19c: search_related — busca por documentos/artefatos relacionados usando enriquecimento
+
+> Substitui o `search_similar` raso (kNN ou MLT) por um algoritmo que combina todos os sinais
+> de enriquecimento disponíveis via RRF nativo do ES.
+
+- [x] Implementar `DocumentosSearchService.search_related(document_id, limit=10)`:
+  - Lê do doc: `ato.embedding_vector`, `ato.entidades[].texto`, `ato.keywords`
+  - Monta `should` com os sinais disponíveis:
+    - MLT sobre `ato.ementa + ato.titulo + attachment.content` (boost 0.5 — base sempre presente)
+    - Nested match `ato.entidades.texto` com os textos das entidades do doc (boost 1.5)
+    - Terms `ato.keywords` com as keywords do doc (boost 1.2)
+  - Se tem embedding: adiciona `knn` + `rank: {rrf: {window_size: limit*2}}`
+  - `must_not: [{term: {_id: document_id}}]` em query e filtro do kNN
+  - Retorna `{hits, enrichment_used, total}` — `enrichment_used` lista os sinais ativos
+- [x] Implementar `ArtefatosSearchService.search_related(artefato_id, limit=10)`:
+  - Mesma lógica, campos `artefato.*`
+- [x] Registrar rotas (antes da rota `/{id}` genérica para evitar conflito FastAPI):
+  - `GET /api/v1/documentos/search/related/{document_id}?limit=10`
+  - `GET /api/v1/artefatos/search/related/{artefato_id}?limit=10`
+- [x] Remover stubs `/similar` dos routers (renomear para `/related`)
+- [x] **Validar**:
+  1. Doc com enriquecimento completo — `TjcA7psBL-x_8ArHDqI6` (Manual de Auditoria Interna do Ifal):
+     ```bash
+     curl -s -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+       "http://localhost:8000/api/v1/documentos/search/related/TjcA7psBL-x_8ArHDqI6?limit=5"
+     ```
+     Resposta deve ter `enrichment_used` com `entities` e `keywords` (embedding depende de licença RRF).
+  2. Doc sem enriquecimento — `xTcP7psBL-x_8ArHdKOj` (Portaria nº 1.286/IFAL):
+     ```bash
+     curl -s -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+       "http://localhost:8000/api/v1/documentos/search/related/xTcP7psBL-x_8ArHdKOj?limit=5"
+     ```
+     Resposta deve ter `enrichment_used: []` e resultados via MLT puro.
+  3. ID inexistente → 404:
+     ```bash
+     curl -s -o /dev/null -w "%{http_code}" \
+       -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+       "http://localhost:8000/api/v1/documentos/search/related/ID-FANTASMA"
+     ```
+  4. Validar que o próprio doc não aparece nos resultados:
+     ```bash
+     curl -s -H "Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e" \
+       "http://localhost:8000/api/v1/documentos/search/related/TjcA7psBL-x_8ArHDqI6?limit=10" \
+       | python3 -c "import json,sys; d=json.load(sys.stdin); ids=[r['id'] for r in d['data']]; print('OK - não aparece' if 'TjcA7psBL-x_8ArHDqI6' not in ids else 'FALHOU - doc apareceu nos resultados')"
+     ```
 
 ---
 
@@ -322,28 +405,68 @@
 
 > **Ao final deste bloco**: Chat RAG funcionando com busca híbrida, sessões e contexto dinâmico.
 
-### T-20: RasaClient + fallback
+### T-20: RasaClient + modelo NLU treinado + fallback
+
+> Setup completo do Rasa neste bloco para que o chat funcione de verdade (não só fallback).
+
 - [ ] Criar `app/clients/rasa_client.py`:
-  - classify_intent(message) → intent name
-  - health_check()
-  - Fallback: se Rasa indisponível → retorna "ask_about_document"
-- [ ] Atualizar `GET /api/v1/health` para incluir status do Rasa
-- [ ] **Validar**: health mostra Rasa status. Fallback funciona sem Rasa rodando.
+  - `parse(message: str) -> dict` → `{"intent": {"name": "...", "confidence": 0.9}}`
+  - `health_check() -> bool`
+  - Fallback: se Rasa indisponível ou confidence < 0.6 → retorna `"ask_about_document"`
+- [ ] Criar estrutura mínima Rasa em `rasa/`:
+  - `rasa/nlu.yml` — 2 intents com ~15 exemplos cada (gerar com LLM):
+    - `ask_about_document`: frases sobre consulta a documentos, editais, regulamentos, prazos, normas
+    - `chitchat`: saudações, agradecimentos, perguntas gerais sem relação a documentos
+  - `rasa/config.yml` — pipeline: `WhitespaceTokenizer`, `DIETClassifier` (treinamento rápido)
+  - `rasa/domain.yml` — intents: `[ask_about_document, chitchat]`
+  - `rasa/endpoints.yml` — `action_endpoint: url: "http://localhost:5055/webhook"`
+- [ ] Treinar modelo localmente:
+  ```
+  docker run --rm -v $(pwd)/rasa:/app rasa/rasa:latest train nlu
+  ```
+  Modelo gerado em `rasa/models/`.
+- [ ] Atualizar `GET /api/v1/health` para incluir status do Rasa (online/offline)
+- [ ] **Validar**:
+  1. Com Rasa online: `curl -X POST http://localhost:5005/model/parse -d '{"text": "quais são os prazos do edital?"}'` → intent `ask_about_document`
+  2. Com Rasa online: `curl -X POST http://localhost:5005/model/parse -d '{"text": "bom dia!"}'` → intent `chitchat`
+  3. Com Rasa offline: `GET /api/v1/health` → `rasa: "offline"`. Fallback: `rasa_client.parse()` retorna `"ask_about_document"` sem exceção.
 
 ### T-21: ChatService + Router
-- [ ] Criar `app/services/chat.py`:
-  - handle_message: Rasa → decisão (chunks vs texto completo) → busca híbrida RRF → LLM → persistir
-  - load_history, append_to_session
-  - TTL de sessão
-- [ ] Substituir stubs em `chat.py`:
-  - POST /chat/message
-  - GET /chat/sessions/{id}
-  - GET /chat/sessions
-  - DELETE /chat/sessions/{id}
-  - POST /chat/sessions/{id}/add-documento
-  - POST /chat/sessions/{id}/add-artefato
-  - DELETE /chat/sessions/{id}/context
-- [ ] **Validar**: enviar mensagem sobre um doc enriquecido → resposta fundamentada no conteúdo
+
+- [ ] Criar `app/services/chat.py` conforme design seção 13:
+  - `handle_message(message, session_id, source_type=None)`:
+    - Lê sessão do ES (verifica `expires_at > now`)
+    - Classifica via Rasa (fallback `ask_about_document`)
+    - Monta contexto a partir de `context_document_ids`/`context_artefato_ids` da sessão
+    - Para cada doc com chunks → `_hybrid_search` (RRF nativo, 1 chamada ES)
+    - Para cada doc sem chunks → `attachment.content` completo
+    - Sem contexto específico → busca livre nos chunks (filtrado por source_type)
+    - Gera resposta via LLM
+    - Persiste mensagens + renova `expires_at` (scripted update)
+  - `_get_or_create_session(session_id)`:
+    - Retorna sessão válida ou cria nova com `expires_at = now + CHAT_SESSION_TTL_HOURS`
+  - `_hybrid_search(query, indices, document_id=None)`:
+    - Gera embedding da query
+    - Uma única query ES com `rank: {rrf: {window_size: 10}}`
+    - Retorna `result["hits"]["hits"]` diretamente (sem merge manual)
+  - `add_document_to_context(session_id, document_id)` → append em `context_document_ids` (sem duplicar)
+  - `add_artefato_to_context(session_id, artefato_id)` → append em `context_artefato_ids` (sem duplicar)
+  - `clear_context(session_id)` → zera ambas as listas
+- [ ] Substituir stubs em `app/api/routers/chat.py`:
+  - `POST /chat/message` — body: `{message, session_id, source_type?}` (sem `document_ids`)
+  - `GET /chat/sessions/{session_id}` — resposta inclui `context_document_ids`, `context_artefato_ids`, `expires_at`
+  - `GET /chat/sessions` — lista sessões com `expires_at > now`
+  - `DELETE /chat/sessions/{session_id}`
+  - `POST /chat/sessions/{session_id}/add-documento` — body: `{document_id}`; valida que doc existe; 404 se não
+  - `POST /chat/sessions/{session_id}/add-artefato` — body: `{artefato_id}`; valida que artefato existe; 404 se não
+  - `DELETE /chat/sessions/{session_id}/context`
+- [ ] **Validar**:
+  1. Sem contexto: `POST /chat/message {message: "o que é um edital?", session_id: "s1"}` → busca livre nos chunks, resposta do LLM
+  2. Com contexto: `POST /chat/sessions/s1/add-documento {document_id: "<id_enriquecido>"}` → 200 com context_document_ids preenchido
+  3. `POST /chat/message {message: "qual o prazo?", session_id: "s1"}` → busca só nos chunks do doc adicionado → resposta fundamentada
+  4. `DELETE /chat/sessions/s1/context` → context_document_ids=[]
+  5. TTL: criar sessão com `CHAT_SESSION_TTL_HOURS=0` (no .env de teste) → próxima mensagem recria sessão vazia
+  6. Chitchat: `POST /chat/message {message: "bom dia!", session_id: "s2"}` → Rasa retorna `chitchat` → resposta sem busca no ES
 
 ---
 
@@ -411,10 +534,14 @@
 - [ ] Search: busca retorna resultados com highlights
 
 ### T-30: Testes do ChatService
-- [ ] ask_about_document + doc com chunks → busca híbrida
-- [ ] ask_about_document + doc sem chunks → texto completo
-- [ ] chitchat → direto ao LLM
-- [ ] Sessão persistida e recuperável
+- [ ] `ask_about_document` + sessão com `context_document_ids` + doc com chunks → `_hybrid_search` chamado com índice correto (RRF nativo, 1 chamada ES)
+- [ ] `ask_about_document` + sessão com `context_document_ids` + doc sem chunks → `attachment.content` usado como contexto
+- [ ] `ask_about_document` + sessão sem contexto + `source_type="artefatos"` → busca só em `artefatos_chunks`
+- [ ] `chitchat` → `_build_context` não chamado; LLM chamado com `context=""`
+- [ ] Sessão criada com `expires_at` correto; sessão expirada recriada ao receber mensagem
+- [ ] `add_document_to_context` não duplica IDs
+- [ ] `clear_context` zera ambas as listas
+- [ ] Sessão persistida e recuperável via `GET /chat/sessions/{id}` com campos `context_*` e `expires_at`
 
 ---
 
@@ -422,7 +549,11 @@
 
 ### T-31: Edge cases e resiliência
 - [ ] ES offline → 503
-- [ ] Rasa offline → fallback
+- [ ] Rasa offline → fallback `ask_about_document` (sem exceção para o cliente)
+- [ ] Rasa online mas confidence < 0.6 → fallback `ask_about_document`
+- [ ] Sessão expirada → recriada automaticamente (histórico limpo)
+- [ ] `add-documento` com `document_id` inexistente → 404
+- [ ] `add-artefato` com `artefato_id` inexistente → 404
 - [ ] LLM falha → exceção
 - [ ] PDF corrompido → erro controlado
 - [ ] chunk_size < 3000 → 422
@@ -432,8 +563,10 @@
 
 ### T-32: Busca avançada
 - [ ] Facetas retornam agregações corretas
-- [ ] Similar com embedding → kNN
-- [ ] Similar sem embedding → more_like_this
+- [ ] `search_related` com enriquecimento completo → RRF com kNN + entidades + keywords + MLT; `enrichment_used` correto
+- [ ] `search_related` sem embedding → sem kNN no body, só should clauses; `enrichment_used` sem "embedding"
+- [ ] `search_related` sem nenhum enriquecimento → MLT puro; `enrichment_used: []`
+- [ ] O próprio documento nunca aparece nos resultados
 - [ ] by-entity e by-keyword retornam matches corretos
 - [ ] Suggest retorna sugestões
 - [ ] popularity_score influencia ranking
@@ -543,11 +676,12 @@
 - [ ] Volume para modelos Rasa treinados
 - [ ] **Validar**: `docker compose up` → API + Rasa + frontend rodando
 
-### T-35: Rasa treinamento
-- [ ] Criar `rasa/data/nlu.yml` com exemplos de intenções
-- [ ] `rasa/config.yml`, `domain.yml`
-- [ ] Treinar modelo
-- [ ] **Validar**: chat classifica intenções corretamente
+### T-35: Rasa produção (expansão do modelo treinado no T-20)
+- [ ] Revisar e expandir `rasa/nlu.yml` com mais exemplos reais coletados em uso
+- [ ] Ajustar `rasa/config.yml` se necessário (ex: trocar DIETClassifier por modelo maior)
+- [ ] Re-treinar modelo dentro do container Docker de produção: `docker compose run rasa train nlu`
+- [ ] Validar que o container Rasa sobe corretamente com o modelo novo
+- [ ] **Validar**: `GET /api/v1/health` mostra Rasa online no ambiente Docker
 
 ---
 

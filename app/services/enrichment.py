@@ -24,9 +24,15 @@ def _now() -> str:
 
 
 class EnrichmentService:
-    def __init__(self, es_client: ESClient, llm_provider: BaseLLMProvider):
+    def __init__(
+        self,
+        es_client: ESClient,
+        llm_provider: BaseLLMProvider,
+        embedding_provider: BaseLLMProvider | None = None,
+    ):
         self.es = es_client
         self.llm = llm_provider
+        self.embed = embedding_provider or llm_provider
 
     async def enrich_summary(self, index: str, doc_id: str, root: str) -> str:
         """Gera resumo e grava em {root}.resumo + {root}.resumo_at."""
@@ -38,18 +44,55 @@ class EnrichmentService:
         await self._update(index, doc_id, root, {"resumo": summary, "resumo_at": _now()})
         return summary
 
-    async def enrich_vector(self, index: str, doc_id: str, root: str) -> list[float]:
-        """Gera embedding a partir do resumo. Se resumo não existe, gera primeiro."""
+    async def enrich_vector(
+        self, index: str, doc_id: str, root: str, head_size: int = 5000
+    ) -> list[float]:
+        """Embeda resumo (se existir) ou primeiros head_size chars do conteúdo.
+
+        Grava embedding_source: "resumo" | "inicio_documento".
+        Independente de enrich_summary — não gera resumo automaticamente.
+        Ver design.md §14 — Estratégia de embedding e §5.5 — kNN.
+        """
         doc = await self._get_doc(index, doc_id)
         resumo = doc["_source"].get(root, {}).get("resumo")
 
-        if not resumo:
-            resumo = await self.enrich_summary(index, doc_id, root)
+        if resumo:
+            text_to_embed = resumo
+            embedding_source = "resumo"
+        else:
+            content = self._get_content(doc)
+            text_to_embed = content[:head_size]
+            embedding_source = "inicio_documento"
 
-        vector = await self.llm.generate_embedding(resumo)
+        vector = await self.embed.generate_embedding(text_to_embed)
 
-        await self._update(index, doc_id, root, {"embedding_vector": vector, "embedding_vector_at": _now()})
+        await self._update(index, doc_id, root, {
+            "embedding_vector": vector,
+            "embedding_vector_at": _now(),
+            "embedding_source": embedding_source,
+        })
         return vector
+
+    async def enrich_combined(self, index: str, doc_id: str, root: str) -> dict:
+        """1 chamada LLM + 1 update ES para summary+entities+keywords (vs 3 chamadas individuais).
+
+        Ver design.md §14 — Estratégia de chamadas LLM.
+        """
+        doc = await self._get_doc(index, doc_id)
+        content = self._get_content(doc)
+
+        result = await self.llm.enrich_document_combined(content)
+
+        ts = _now()
+        await self._update(index, doc_id, root, {
+            "resumo": result["resumo"],
+            "resumo_at": ts,
+            "entidades": result["entidades"],
+            "entidades_at": ts,
+            "keywords": result["keywords"],
+            "keywords_at": ts,
+        })
+        return result
 
     async def enrich_entities(self, index: str, doc_id: str, root: str) -> list[dict]:
         """Extrai entidades do conteúdo e grava em {root}.entidades."""
@@ -105,7 +148,7 @@ class EnrichmentService:
 
         actions = []
         for i, chunk_content in enumerate(chunks):
-            vector = await self.llm.generate_embedding(chunk_content)
+            vector = await self.embed.generate_embedding(chunk_content)
             actions.append({
                 "parent_document_id": doc_id,
                 "parent_filename": filename,
