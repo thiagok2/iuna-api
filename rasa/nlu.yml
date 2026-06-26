@@ -4,22 +4,110 @@ nlu:
   - intent: ask_about_document
     examples: |
       - quais são os prazos do edital?
-      - o que diz o regulamento sobre licenças?
+      - quando fecha as inscrições?
+      - qual o prazo de inscrição?
+      - até quando posso me inscrever?
+      - quando encerra o período de inscrição?
+      - qual a data limite para envio dos documentos?
+      - o edital ainda está aberto?
       - quais são os requisitos para participar do processo seletivo?
-      - me explique o artigo 3 da resolução
-      - qual o valor da bolsa descrito no documento?
-      - quando é o prazo de inscrição?
-      - o que é exigido para a progressão funcional?
-      - quais documentos são necessários para matrícula?
-      - como funciona o plano de avaliação?
-      - quais são as penalidades previstas?
-      - o que diz a norma sobre afastamento para capacitação?
-      - qual o cronograma previsto no edital?
       - quem pode se inscrever nesse processo?
       - quais são as etapas da seleção?
-      - me resuma o conteúdo desse documento
-      - há alguma cláusula sobre rescisão contratual?
+      - quais documentos são necessários para matrícula?
+      - o que preciso apresentar para me inscrever?
+      - quais são os documentos exigidos?
+      - preciso de diploma para participar?
+      - qual o resultado da seleção?
+      - quando sai o resultado?
+      - onde vejo a lista de aprovados?
+      - qual o cronograma previsto no edital?
+      - quais são as fases do processo?
+      - como funciona o plano de avaliação?
+      - como é feita a seleção dos candidatos?
+      - qual o critério de desempate?
+      - o que diz o regulamento sobre licenças?
       - qual é a carga horária mínima exigida?
+      - o que é exigido para a progressão funcional?
+      - o que diz a norma sobre afastamento para capacitação?
+      - quais são as penalidades previstas?
+      - há alguma cláusula sobre rescisão contratual?
+      - me explique o artigo 3 da resolução
+      - o que diz o artigo sobre regime de trabalho?
+      - qual o valor da bolsa descrito no documento?
+      - qual o valor da bolsa do PIBID?
+      - quanto é a bolsa de iniciação científica?
+      - tem bolsa disponível nesse edital?
+      - qual a remuneração prevista?
+      - quais são as vagas disponíveis?
+      - quantas vagas tem no edital?
+      - quais os câmpus que oferecem vagas?
+      - o câmpus Maceió tem vaga?
+      - posso me inscrever em mais de um câmpus?
+      - como me candidatar a coordenador UAB?
+      - quais são os requisitos para coordenador de polo?
+      - o que exige o edital de professor formador?
+      - posso participar do PIBID sendo de licenciatura?
+      - quais cursos estão participando do PIBID?
+      - como submeter um projeto de ensino?
+      - qual o prazo para envio de projetos?
+      - quais são os critérios de avaliação do projeto?
+      - como é avaliado o projeto de extensão?
+      - o que precisa ter no plano de trabalho?
+      - quais as regras para submissão de projeto de pesquisa?
+      - tem edital de iniciação científica aberto?
+      - como solicitar bolsa de pesquisa?
+      - onde encontro a resolução do CEPE sobre estágio?
+      - o que diz a resolução sobre avaliação?
+      - qual resolução trata sobre o regime de trabalho docente?
+      - me resuma essa resolução
+      - o que muda com a nova portaria?
+      - o que diz a portaria sobre progressão por titulação?
+      - qual normativa regula o afastamento?
+      - quais são as normas para licença capacitação?
+      - me diz o que a instrução normativa fala sobre ponto eletrônico
+      - qual portaria criou esse programa?
+      - quem assinou essa portaria?
+      - quando foi publicada essa resolução?
+      - essa resolução ainda está em vigor?
+      - qual o número dessa portaria?
+      - o edital foi retificado?
+      - o que mudou na retificação?
+      - tem alguma errata publicada?
+      - houve alteração no cronograma?
+      - o que diz o boletim de serviço dessa semana?
+      - o que foi publicado no último boletim?
+      - quais atos foram publicados hoje?
+      - me diz o que saiu no boletim sobre remoção
+      - o que diz o boletim sobre progressão?
+      - tem algum ato sobre concurso publicado?
+      - como é o processo de remoção de servidor?
+      - quais são as regras para remoção?
+      - quais são os requisitos do concurso público?
+      - quando abre o próximo concurso do IFAL?
+      - o edital do concurso prevê prova prática?
+      - quais disciplinas caem na prova?
+      - qual o conteúdo programático do concurso?
+      - como funciona a progressão funcional?
+      - quais são os critérios pra subir de nível?
+      - o plano de carreira prevê adicional de titulação?
+      - como calcular o tempo de serviço para aposentadoria?
+      - quais são as regras do PROFUNCIONÁRIO?
+      - o curso técnico em secretaria escolar tem pré-requisito?
+      - qual a duração do curso oferecido no edital?
+      - tem ensino a distância disponível?
+      - como funciona o curso UAB?
+      - quais especializações estão abertas?
+      - o curso de gestão em EPT tem seleção esse semestre?
+      - me resuma o conteúdo desse documento
+      - do que trata esse edital?
+      - explica pra mim o que diz esse regulamento
+      - quero entender o que esse ato muda
+      - me diz os pontos principais desse documento
+      - tem prazo pra recorrer do resultado?
+      - como fazer recurso?
+      - qual o procedimento para interpor recurso?
+      - dentro de quanto tempo posso recorrer?
+      - onde protocolo o recurso?
 
   - intent: chitchat
     examples: |
@@ -28,15 +116,32 @@ nlu:
       - oi
       - boa tarde
       - boa noite
+      - e aí
+      - olá!
       - obrigado pela ajuda
       - valeu!
       - muito obrigado
+      - muito obrigada
+      - brigadão
       - que legal!
       - você pode me ajudar?
       - até logo
       - tchau
+      - até mais
+      - falou
       - que horas são?
       - como você se chama?
       - quem é você?
       - você é uma IA?
+      - você é um robô?
       - você fala português?
+      - como você funciona?
+      - o que você faz?
+      - sim
+      - não
+      - talvez
+      - claro
+      - entendi
+      - ok
+      - certo
+      - perfeito
