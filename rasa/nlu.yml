@@ -1,0 +1,42 @@
+version: "3.1"
+
+nlu:
+  - intent: ask_about_document
+    examples: |
+      - quais são os prazos do edital?
+      - o que diz o regulamento sobre licenças?
+      - quais são os requisitos para participar do processo seletivo?
+      - me explique o artigo 3 da resolução
+      - qual o valor da bolsa descrito no documento?
+      - quando é o prazo de inscrição?
+      - o que é exigido para a progressão funcional?
+      - quais documentos são necessários para matrícula?
+      - como funciona o plano de avaliação?
+      - quais são as penalidades previstas?
+      - o que diz a norma sobre afastamento para capacitação?
+      - qual o cronograma previsto no edital?
+      - quem pode se inscrever nesse processo?
+      - quais são as etapas da seleção?
+      - me resuma o conteúdo desse documento
+      - há alguma cláusula sobre rescisão contratual?
+      - qual é a carga horária mínima exigida?
+
+  - intent: chitchat
+    examples: |
+      - bom dia!
+      - olá, tudo bem?
+      - oi
+      - boa tarde
+      - boa noite
+      - obrigado pela ajuda
+      - valeu!
+      - muito obrigado
+      - que legal!
+      - você pode me ajudar?
+      - até logo
+      - tchau
+      - que horas são?
+      - como você se chama?
+      - quem é você?
+      - você é uma IA?
+      - você fala português?

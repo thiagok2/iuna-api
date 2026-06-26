@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from app.api.dependencies import verify_token
 from app.api.models.responses import HealthResponse
 from app.clients.es_client import es_client
+from app.clients.rasa_client import rasa_client
 from app.config import settings
 
 router = APIRouter()
@@ -45,12 +46,17 @@ async def info():
 async def health():
     """Deep health check — verifies connectivity to each dependency. Requires auth."""
     es_ok = await es_client.ping()
+    rasa_ok = await rasa_client.health_check()
 
     dependencies = {
         "elasticsearch": {
             "status": "up" if es_ok else "down",
             "host": settings.ELASTICSEARCH_HOSTS,
-        }
+        },
+        "rasa": {
+            "status": "up" if rasa_ok else "offline",
+            "url": settings.RASA_API_URL,
+        },
     }
 
     overall = "healthy" if es_ok else "degraded"

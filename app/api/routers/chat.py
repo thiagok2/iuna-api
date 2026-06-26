@@ -2,7 +2,7 @@
 Chat routes — RAG-powered conversational interface.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, Path, Query
 
 from app.api.dependencies import verify_token
 from app.api.models.requests import (
@@ -16,12 +16,25 @@ from app.api.models.responses import (
     ErrorResponse,
     PaginatedResponse,
 )
+from app.clients.es_client import es_client
+from app.clients.rasa_client import rasa_client
+from app.providers.factory import get_embedding_provider, get_llm_provider
+from app.services.chat import ChatService
 
 router = APIRouter(
     prefix="/chat",
     tags=["chat"],
     dependencies=[Depends(verify_token)],
 )
+
+
+def _svc() -> ChatService:
+    return ChatService(
+        es_client=es_client,
+        llm_provider=get_llm_provider(),
+        embedding_provider=get_embedding_provider(),
+        rasa_client=rasa_client,
+    )
 
 
 @router.post(
@@ -34,7 +47,13 @@ router = APIRouter(
     responses={400: {"model": ErrorResponse, "description": "Requisição inválida"}},
 )
 async def send_message(body: ChatMessageRequest):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    svc = _svc()
+    result = await svc.handle_message(
+        message=body.message,
+        session_id=body.session_id,
+        source_type=body.source_type,
+    )
+    return ChatMessageResponse(data=result)
 
 
 @router.get(
@@ -47,20 +66,31 @@ async def send_message(body: ChatMessageRequest):
 async def get_session(
     session_id: str = Path(..., description="ID da sessão de chat", examples=["session-uuid-123"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    svc = _svc()
+    session = await svc.get_session(session_id)
+    return APIResponse(data=session)
 
 
 @router.get(
     "/sessions",
     summary="Listar sessões de chat",
-    description="Lista todas as sessões de chat com paginação, ordenadas por última atividade.",
+    description="Lista todas as sessões de chat ativas (expires_at > now), ordenadas por última atividade.",
     response_model=PaginatedResponse,
 )
 async def list_sessions(
     page: int = Query(1, ge=1, description="Página", examples=[1]),
     page_size: int = Query(20, ge=1, le=100, description="Itens por página", examples=[20]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    svc = _svc()
+    result = await svc.list_sessions(page=page, page_size=page_size)
+    return PaginatedResponse(
+        data=result["sessions"],
+        meta={
+            "page": result["page"],
+            "page_size": result["page_size"],
+            "total": result["total"],
+        },
+    )
 
 
 @router.delete(
@@ -73,7 +103,9 @@ async def list_sessions(
 async def delete_session(
     session_id: str = Path(..., description="ID da sessão a excluir", examples=["session-uuid-123"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    svc = _svc()
+    await svc.delete_session(session_id)
+    return APIResponse(data={"session_id": session_id, "deleted": True})
 
 
 @router.post(
@@ -90,7 +122,12 @@ async def add_documento_to_session(
     session_id: str = Path(..., description="ID da sessão", examples=["session-uuid-123"]),
     body: AddDocumentoToSessionRequest = ...,
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    svc = _svc()
+    result = await svc.add_document_to_context(
+        session_id=session_id,
+        document_id=body.document_id,
+    )
+    return APIResponse(data=result)
 
 
 @router.post(
@@ -107,7 +144,12 @@ async def add_artefato_to_session(
     session_id: str = Path(..., description="ID da sessão", examples=["session-uuid-123"]),
     body: AddArtefatoToSessionRequest = ...,
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    svc = _svc()
+    result = await svc.add_artefato_to_context(
+        session_id=session_id,
+        artefato_id=body.artefato_id,
+    )
+    return APIResponse(data=result)
 
 
 @router.delete(
@@ -121,4 +163,6 @@ async def add_artefato_to_session(
 async def clear_session_context(
     session_id: str = Path(..., description="ID da sessão", examples=["session-uuid-123"]),
 ):
-    raise HTTPException(status_code=501, detail="Not implemented")
+    svc = _svc()
+    result = await svc.clear_context(session_id)
+    return APIResponse(data=result)

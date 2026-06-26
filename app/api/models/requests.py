@@ -92,12 +92,10 @@ class ChatMessageRequest(BaseModel):
         examples=["O que diz o edital 01/2024 sobre o prazo de inscrição?"],
     )
     session_id: str = Field(..., description="ID da sessão de chat", examples=["session-uuid-123"])
-    document_ids: Optional[list[str]] = Field(
-        None, description="IDs dos documentos para contexto", examples=[["doc-id-1"]]
-    )
     source_type: Optional[str] = Field(
         None,
-        description="Tipo de fonte para busca (documentos_ifal_v2, artefatos...)",
+        description="Tipo de fonte para busca livre (documentos_ifal_v2, artefatos). "
+        "Usado apenas quando a sessão não tem documentos específicos no contexto.",
         examples=["documentos_ifal_v2"],
     )
 

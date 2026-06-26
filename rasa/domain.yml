@@ -1,0 +1,15 @@
+version: "3.1"
+
+intents:
+  - ask_about_document
+  - chitchat
+
+responses:
+  utter_chitchat:
+    - text: "Olá! Posso ajudar com dúvidas sobre documentos institucionais."
+  utter_ask_about_document:
+    - text: "Vou buscar as informações nos documentos disponíveis."
+
+session_config:
+  session_expiration_time: 60
+  carry_over_slots_to_new_session: true
