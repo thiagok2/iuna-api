@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s \"http://localhost:8000/\")",
+      "Bash(curl -s \"http://localhost:8000/health-check\")",
+      "Bash(curl -s \"http://localhost:8000/api/v1/documentos/search/?q=edital&page_size=5\" -H \"Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e\")",
+      "Bash(curl -v \"http://127.0.0.1:8000/api/v1/documentos/search/?q=edital\" -H \"Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e\")",
+      "Bash(curl -s -H 'Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=' https://elastic.pnld-avaliacao-dev.nees.ufal.br/documentos_ifal_v2/ejcC7psBL-x_8ArHVaKJ?pretty)",
+      "Bash(curl -s -H 'Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=' https://elastic.pnld-avaliacao-dev.nees.ufal.br/documentos_ifal_v2/_doc/ejcC7psBL-x_8ArHVaKJ?pretty)",
+      "Bash(curl -s -H 'Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=' https://elastic.pnld-avaliacao-dev.nees.ufal.br/documentos_ifal/_search?pretty -H 'Content-Type: application/json' -d '{\"size\":1,\"_source\":[\"ato.titulo\",\"ato.tipo_doc\"],\"query\":{\"match_all\":{}}}')",
+      "Bash(python3 -c ' *)",
+      "Bash(bash /Users/thiagooliveira/desenv/workspace/ifal/iuna-api/tests/manual/t19b_busca_legado.sh)",
+      "Bash(.venv/bin/python -c \"from app.services._search_base import BaseSearchService; from app.api.routers.search_documentos import router as dr; from app.api.routers.search_artefatos import router as ar; print\\('OK — imports limpos'\\)\")",
+      "Bash(curl -s http://localhost:8000/api/v1/documentos/search/related/ejcC7psBL-x_8ArHVaKJ?limit=3 -H 'Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e')",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/v1/documentos/search/related/ID-INEXISTENTE -H 'Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e')",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/v1/artefatos/search/related/ID-INEXISTENTE -H 'Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e')",
+      "Bash(curl -s -H 'Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=' https://elastic.pnld-avaliacao-dev.nees.ufal.br/documentos_ifal_v2/_search?pretty -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(curl -s -H 'Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=' https://elastic.pnld-avaliacao-dev.nees.ufal.br/artefatos/_search?pretty -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(bash /Users/thiagooliveira/desenv/workspace/ifal/iuna-api/tests/manual/t19c_search_related.sh)",
+      "Bash(curl -s -H 'Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=' https://elastic.pnld-avaliacao-dev.nees.ufal.br/artefatos/_doc/13e17202-2843-4827-be0d-1e8b62e7d4a9?pretty)",
+      "Bash(curl -s -H 'Authorization: Basic ZWxhc3RpYzpTWFR0NHJrMDV1RHE=' https://elastic.pnld-avaliacao-dev.nees.ufal.br/artefatos/_doc/13e17202-2843-4827-be0d-1e8b62e7d4a9?_source_includes=artefato.embedding_vector)",
+      "Bash(curl -s http://localhost:8000/api/v1/artefatos/search/related/13e17202-2843-4827-be0d-1e8b62e7d4a9?limit=3 -H 'Authorization: Bearer 77c7fa54-9b2c-44c1-a7e2-aea881a7797e')",
+      "Bash(.venv/bin/python3 -c ' *)",
+      "Bash(.venv/bin/python -c \"from app.cli.main import app; print\\('OK'\\)\")",
+      "Bash(.venv/bin/python -c \"from app.cli.main import app; from app.services.enrichment import EnrichmentService; print\\('OK'\\)\")",
+      "Bash(.venv/bin/python -c ' *)",
+      "Bash(.venv/bin/python -c \"from app.services.enrichment import EnrichmentService; print\\('OK'\\)\")",
+      "Bash(.venv/bin/python -c \"from app.cli.main import app; from app.providers.gemini import GeminiProvider; print\\('OK'\\)\")",
+      "Bash(.venv/bin/python -m app.cli.main stats)",
+      "Bash(.venv/bin/python -c \"from app.providers.gemini import GeminiProvider; print\\('OK'\\)\")"
+    ]
+  }
+}
